@@ -409,4 +409,7 @@ def main():
     
     # === 页脚 ===
     st.markdown("---")
-    st.markdown("<center>PDF智能填表系统 v2.1 | 坐标精确修复版 | 字体完全一致
+    st.markdown("<center>PDF智能填表系统 v2.1 | 坐标精确修复版 | 字体完全一致保证</center>", unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    main()
