@@ -1,8 +1,9 @@
 """
-PDF智能填表系统 v8.0 - 最终完美版
+PDF智能填表系统 v8.1 - 完美修复版
 =====================================
+修复: 方框线对称 - 覆盖原文字时不触碰左右方格线
 1. TextWriter + 原字体数据（逗号显示正确）
-2. 精确覆盖原文字span（不碰方格线，无线变幼/双线）
+2. 精确覆盖原文字span（内缩边距，完全不碰方格线）
 3. 右边距 0.3pt（紧贴线）
 4. 保存: garbage=0, deflate=False, clean=False
 """
@@ -132,19 +133,30 @@ def fill_pdf_core(pdf_bytes, font_data, values):
             else:
                 write_x = (x1 - 0.3) - tw
             
-            # === 精确覆盖方格内的原文字spans（不碰方格线）===
+            # === 修复: 精确覆盖原文字spans，完全不碰方格线 ===
+            # 关键: 覆蓋矩形內縮 0.8pt 邊距，確保不觸碰左右方格線
+            INSET = 0.8  # 內縮邊距(點)，保護方格線不被覆蓋
             for b in page.get_text("dict")["blocks"]:
                 if "lines" not in b:
                     continue
                 for line in b["lines"]:
                     for span in line["spans"]:
                         sb = span["bbox"]
+                        # 只處理在方格內的span
                         if sb[0] >= x0 - 1 and sb[2] <= x1 + 1 and sb[1] >= y0 - 1 and sb[3] <= y1 + 1:
-                            cover_rect = fitz.Rect(sb[0], sb[1], sb[2], sb[3])
-                            shape = page.new_shape()
-                            shape.draw_rect(cover_rect)
-                            shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
-                            shape.commit()
+                            # 內縮邊距，確保不觸碰方格線
+                            cover_left   = max(sb[0] + INSET, x0 + INSET)
+                            cover_right  = min(sb[2] - INSET, x1 - INSET)
+                            cover_top    = max(sb[1] + INSET, y0 + INSET)
+                            cover_bottom = min(sb[3] - INSET, y1 - INSET)
+                            
+                            # 確保覆蓋矩形有效（寬高為正）
+                            if cover_right > cover_left and cover_bottom > cover_top:
+                                cover_rect = fitz.Rect(cover_left, cover_top, cover_right, cover_bottom)
+                                shape = page.new_shape()
+                                shape.draw_rect(cover_rect)
+                                shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
+                                shape.commit()
             
             if original_font:
                 twriter = fitz.TextWriter(page.rect)
@@ -162,8 +174,8 @@ def fill_pdf_core(pdf_bytes, font_data, values):
 
 
 def main():
-    st.title("📄 PDF智能填表系统 v8.0")
-    st.markdown("完美版 | 精确覆盖不碰线 | 逗号正确 | 字体一致 | 自动两位小数")
+    st.title("📄 PDF智能填表系统 v8.1")
+    st.markdown("完美修复版 | 方框线对称保护 | 逗号正确 | 字体一致 | 自动两位小数")
     
     st.header("1️⃣ 上传PDF模板")
     uploaded_file = st.file_uploader("选择PDF文件", type=["pdf"])
@@ -252,7 +264,7 @@ def main():
                 st.exception(e)
     
     st.markdown("---")
-    st.markdown("<center>PDF智能填表系统 v8.0 完美版 | 不重画方格线</center>", unsafe_allow_html=True)
+    st.markdown("<center>PDF智能填表系统 v8.1 完美修复版 | 方框线对称保护</center>", unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
