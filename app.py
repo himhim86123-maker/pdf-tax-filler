@@ -1,11 +1,11 @@
 """
-PDF智能填表系统 v8.3 - 逗号修复+右对齐统一版
+PDF智能填表系统 v8.4 - 逗号修复最终版
 =====================================
-修复: 
-1. 改用 page.insert_text + fontfile 确保逗号正确显示
-2. 所有数值字段(eq+aq+L+FZ)统一右对齐
-3. eq/aq: 右间距0.5pt | L/FZ: 右间距0.2pt
-4. 精确覆盖原文字span（内缩边距，完全不碰方格线）
+修复: TextWriter 逐字符 append() 写入，确保逗号正确显示
+1. TextWriter + 逐字符写入（逗号/小数点/数字分别控制宽度）
+2. 精确覆盖原文字span（内缩边距，完全不碰方格线）
+3. 所有数值字段统一右对齐
+4. eq/aq: 右间距0.5pt | L/FZ: 右间距0.2pt
 5. 保存: garbage=0, deflate=False, clean=False
 """
 
@@ -17,8 +17,15 @@ import tempfile
 
 st.set_page_config(page_title="PDF智能填表系统", layout="wide")
 
+# ---- 字符宽度常量 ----
+CHAR_W = 4.0      # 数字/字母宽度
+COMMA_W = 2.5     # 逗号宽度
+DOT_W = 2.0       # 小数点宽度
+FONTSIZE = 8.0    # 字号
+
 
 def extract_font_data(doc):
+    """从PDF中提取原始SimSun字体数据"""
     try:
         data = doc.xref_stream(5)
         if data and len(data) > 1000:
@@ -44,6 +51,7 @@ def extract_font_data(doc):
 
 
 def fmt_decimal(value, field_key):
+    """格式化数字"""
     if not value or not str(value).strip():
         return value
     if field_key.startswith("eq"):
@@ -59,116 +67,151 @@ def fmt_decimal(value, field_key):
         return text
 
 
+def calc_text_width(text):
+    """计算逐字符写入时的总宽度"""
+    total = 0
+    for char in text:
+        if char == ',':
+            total += COMMA_W
+        elif char == '.':
+            total += DOT_W
+        else:
+            total += CHAR_W
+    return total
+
+
+def write_field_tw(page, font, x0, x1, y0, y1, text, right_margin=0.2):
+    """
+    TextWriter 逐字符写入
+    关键: 逗号/小数点/数字分别控制宽度，确保逗号正确显示
+    """
+    # 1. 覆盖原文字
+    INSET = 0.8
+    for b in page.get_text("dict")["blocks"]:
+        if "lines" not in b:
+            continue
+        for line in b["lines"]:
+            for span in line["spans"]:
+                sb = span["bbox"]
+                if sb[0] >= x0 - 1 and sb[2] <= x1 + 1 and sb[1] >= y0 - 1 and sb[3] <= y1 + 1:
+                    cover_rect = fitz.Rect(sb[0] + INSET, sb[1] + INSET, sb[2] - INSET, sb[3] - INSET)
+                    shape = page.new_shape()
+                    shape.draw_rect(cover_rect)
+                    shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
+                    shape.commit()
+
+    # 2. TextWriter 逐字符写入
+    origin_y = y0 + (y1 - y0) * 0.75
+    right_edge = x1 - right_margin
+    total_width = calc_text_width(text)
+    current_x = right_edge - total_width
+
+    tw = fitz.TextWriter(page.rect)
+    for char in text:
+        if char == ',':
+            tw.append((current_x, origin_y), char, font=font, fontsize=FONTSIZE)
+            current_x += COMMA_W
+        elif char == '.':
+            tw.append((current_x, origin_y), char, font=font, fontsize=FONTSIZE)
+            current_x += DOT_W
+        else:
+            tw.append((current_x, origin_y), char, font=font, fontsize=FONTSIZE)
+            current_x += CHAR_W
+    tw.write_text(page, color=(0, 0, 0))
+
+
 FIELD_CFG = {
-    "eq1s":  (0, 100.6, 152.3, 164.8, 183.6),
-    "eq1e":  (0, 152.6, 204.0, 164.8, 183.6),
-    "eq2s":  (0, 204.3, 255.7, 164.8, 183.6),
-    "eq2e":  (0, 256.0, 307.4, 164.8, 183.6),
-    "eq3e":  (0, 514.5, 565.9, 164.8, 183.6),
-    "aq1s":  (0, 100.6, 152.3, 183.6, 202.3),
-    "aq1e":  (0, 152.6, 204.0, 183.6, 202.3),
-    "aq2s":  (0, 204.3, 255.7, 183.6, 202.3),
-    "aq2e":  (0, 256.0, 307.4, 183.6, 202.3),
-    "aq3e":  (0, 514.5, 565.9, 183.6, 202.3),
-    "L1":    (0, 514.5, 565.9, 297.7, 305.7),
-    "L2":    (0, 514.5, 565.9, 316.5, 324.5),
-    "L3":    (0, 514.5, 565.9, 335.2, 343.2),
-    "L4":    (0, 514.5, 565.9, 354.0, 362.0),
-    "L5":    (0, 514.5, 565.9, 372.7, 380.7),
-    "L6":    (0, 514.5, 565.9, 391.5, 399.5),
-    "L7":    (0, 514.5, 565.9, 410.2, 418.2),
-    "L8":    (0, 514.5, 565.9, 429.0, 437.0),
-    "L9":    (0, 514.5, 565.9, 447.7, 455.7),
-    "L10":   (0, 514.5, 565.9, 466.5, 474.5),
-    "L11":   (0, 514.5, 565.9, 485.2, 493.2),
-    "L12":   (0, 514.5, 565.9, 504.0, 512.0),
-    "L13":   (0, 514.5, 565.9, 522.7, 530.7),
-    "L13_1": (0, 514.5, 565.9, 541.5, 549.5),
-    "L14":   (0, 514.5, 565.9, 560.2, 568.2),
-    "L15":   (0, 514.5, 565.9, 579.0, 587.0),
-    "L16":   (0, 514.5, 565.9, 597.7, 605.7),
-    "L17":   (0, 514.5, 565.9, 631.5, 639.5),
-    "L18":   (0, 514.5, 565.9, 650.2, 658.2),
-    "L19":   (0, 514.5, 565.9, 669.0, 677.0),
-    "L20":   (0, 514.5, 565.9, 687.7, 695.7),
-    "L21":   (0, 514.5, 565.9, 706.5, 714.5),
-    "L22":   (0, 514.5, 565.9, 725.2, 733.2),
-    "FZ1":   (0, 514.5, 565.9, 762.7, 770.7),
-    "FZ2":   (0, 514.5, 565.9, 781.5, 789.5),
-    "L23":   (0, 514.5, 565.9, 800.0, 808.0),
-    "agent_name":   (1, 80.8,  184.8, 103.4, 111.4),
-    "agent_id":     (1, 112.8, 264.8, 113.0, 121.0),
-    "receiver":     (1, 355.7, 463.7, 103.4, 111.4),
-    "receive_date": (1, 355.7, 483.7, 122.6, 130.6),
+    # --- 第1行: 从业人数 (右间距0.5pt) ---
+    "eq1s":  (0, 100.6, 152.3, 164.8, 183.6, 0.5),
+    "eq1e":  (0, 152.6, 204.0, 164.8, 183.6, 0.5),
+    "eq2s":  (0, 204.3, 255.7, 164.8, 183.6, 0.5),
+    "eq2e":  (0, 256.0, 307.4, 164.8, 183.6, 0.5),
+    "eq3e":  (0, 514.5, 565.9, 164.8, 183.6, 0.5),
+    # --- 第2行: 资产总额 (右间距0.5pt) ---
+    "aq1s":  (0, 100.6, 152.3, 183.6, 202.3, 0.5),
+    "aq1e":  (0, 152.6, 204.0, 183.6, 202.3, 0.5),
+    "aq2s":  (0, 204.3, 255.7, 183.6, 202.3, 0.5),
+    "aq2e":  (0, 256.0, 307.4, 183.6, 202.3, 0.5),
+    "aq3e":  (0, 514.5, 565.9, 183.6, 202.3, 0.5),
+    # --- 预缴税款计算 (右间距0.2pt) ---
+    "L1":    (0, 514.5, 565.9, 297.7, 305.7, 0.2),
+    "L2":    (0, 514.5, 565.9, 316.5, 324.5, 0.2),
+    "L3":    (0, 514.5, 565.9, 335.2, 343.2, 0.2),
+    "L4":    (0, 514.5, 565.9, 354.0, 362.0, 0.2),
+    "L5":    (0, 514.5, 565.9, 372.7, 380.7, 0.2),
+    "L6":    (0, 514.5, 565.9, 391.5, 399.5, 0.2),
+    "L7":    (0, 514.5, 565.9, 410.2, 418.2, 0.2),
+    "L8":    (0, 514.5, 565.9, 429.0, 437.0, 0.2),
+    "L9":    (0, 514.5, 565.9, 447.7, 455.7, 0.2),
+    "L10":   (0, 514.5, 565.9, 466.5, 474.5, 0.2),
+    "L11":   (0, 514.5, 565.9, 485.2, 493.2, 0.2),
+    "L12":   (0, 514.5, 565.9, 504.0, 512.0, 0.2),
+    "L13":   (0, 514.5, 565.9, 522.7, 530.7, 0.2),
+    "L13_1": (0, 514.5, 565.9, 541.5, 549.5, 0.2),
+    "L14":   (0, 514.5, 565.9, 560.2, 568.2, 0.2),
+    "L15":   (0, 514.5, 565.9, 579.0, 587.0, 0.2),
+    "L16":   (0, 514.5, 565.9, 597.7, 605.7, 0.2),
+    "L17":   (0, 514.5, 565.9, 631.5, 639.5, 0.2),
+    "L18":   (0, 514.5, 565.9, 650.2, 658.2, 0.2),
+    "L19":   (0, 514.5, 565.9, 669.0, 677.0, 0.2),
+    "L20":   (0, 514.5, 565.9, 687.7, 695.7, 0.2),
+    "L21":   (0, 514.5, 565.9, 706.5, 714.5, 0.2),
+    "L22":   (0, 514.5, 565.9, 725.2, 733.2, 0.2),
+    "FZ1":   (0, 514.5, 565.9, 762.7, 770.7, 0.2),
+    "FZ2":   (0, 514.5, 565.9, 781.5, 789.5, 0.2),
+    "L23":   (0, 514.5, 565.9, 800.0, 808.0, 0.2),
+    # --- 第2页: 签章信息 ---
+    "agent_name":   (1, 80.8,  184.8, 103.4, 111.4, 2.0),
+    "agent_id":     (1, 112.8, 264.8, 113.0, 121.0, 2.0),
+    "receiver":     (1, 355.7, 463.7, 103.4, 111.4, 2.0),
+    "receive_date": (1, 355.7, 483.7, 122.6, 130.6, 2.0),
 }
 
 
 def fill_pdf_core(pdf_bytes, font_data, values):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    
+
+    # 字体数据写入临时文件
     fontfile_path = None
     if font_data:
         fd, fontfile_path = tempfile.mkstemp(suffix=".ttf")
         os.write(fd, font_data)
         os.close(fd)
-    
+
     try:
+        # 创建字体对象
+        if fontfile_path:
+            font = fitz.Font(fontfile=fontfile_path)
+        else:
+            font = None
+
         for key, raw_value in values.items():
             if not raw_value or key not in FIELD_CFG:
                 continue
-            
+
             new_value = fmt_decimal(raw_value, key)
             if not new_value:
                 continue
-            
-            page_num, x0, x1, y0, y1 = FIELD_CFG[key]
+
+            page_num, x0, x1, y0, y1, right_margin = FIELD_CFG[key]
             page = doc[page_num]
             text = str(new_value)
-            
-            if fontfile_path:
-                tmp_font = fitz.Font(fontfile=fontfile_path)
-                tw = tmp_font.text_length(text, fontsize=8)
-            else:
-                tw = len(text) * 4.5
-            
-            origin_y = y0 + (y1 - y0) * 0.75
-            
-            if key.startswith("eq") or key.startswith("aq"):
-                write_x = x1 - 0.5 - tw
-            elif key.startswith("L") or key.startswith("FZ"):
-                write_x = x1 - 0.2 - tw
-            elif key in ["agent_name", "agent_id", "receiver", "receive_date"]:
+
+            # 签章字段用简单左对齐
+            if key in ["agent_name", "agent_id", "receiver", "receive_date"]:
+                origin_y = y0 + (y1 - y0) * 0.75
                 write_x = x0 + 2.0
+                if font:
+                    tw = fitz.TextWriter(page.rect)
+                    tw.append((write_x, origin_y), text, font=font, fontsize=FONTSIZE)
+                    tw.write_text(page, color=(0, 0, 0))
+                else:
+                    page.insert_text((write_x, origin_y), text, fontname="china-ss",
+                                     fontsize=FONTSIZE, color=(0, 0, 0))
             else:
-                write_x = (x1 - 3.0) - tw
-            
-            INSET = 1.2
-            for b in page.get_text("dict")["blocks"]:
-                if "lines" not in b:
-                    continue
-                for line in b["lines"]:
-                    for span in line["spans"]:
-                        sb = span["bbox"]
-                        if sb[0] >= x0 - 1 and sb[2] <= x1 + 1 and sb[1] >= y0 - 1 and sb[3] <= y1 + 1:
-                            cover_left   = max(sb[0] + INSET, x0 + INSET)
-                            cover_right  = min(sb[2] - INSET, x1 - INSET)
-                            cover_top    = max(sb[1] + INSET, y0 + INSET)
-                            cover_bottom = min(sb[3] - INSET, y1 - INSET)
-                            
-                            if cover_right > cover_left and cover_bottom > cover_top:
-                                cover_rect = fitz.Rect(cover_left, cover_top, cover_right, cover_bottom)
-                                shape = page.new_shape()
-                                shape.draw_rect(cover_rect)
-                                shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
-                                shape.commit()
-            
-            if fontfile_path:
-                page.insert_text((write_x, origin_y), text, fontname="SimSun",
-                               fontfile=fontfile_path, fontsize=8, color=(0, 0, 0))
-            else:
-                page.insert_text((write_x, origin_y), text, fontname="china-ss",
-                               fontsize=8, color=(0, 0, 0))
-        
+                # 数值字段用 TextWriter 逐字符写入
+                write_field_tw(page, font, x0, x1, y0, y1, text, right_margin)
+
         output = io.BytesIO()
         doc.save(output, garbage=0, deflate=False, clean=False)
         output.seek(0)
@@ -180,46 +223,46 @@ def fill_pdf_core(pdf_bytes, font_data, values):
 
 
 def main():
-    st.title("📄 PDF智能填表系统 v8.3")
-    st.markdown("逗号修复+右对齐统一版 | 方框线对称保护 | 字体一致 | 自动两位小数")
-    
+    st.title("📄 PDF智能填表系统 v8.4")
+    st.markdown("逗号修复最终版 | 方框线对称保护 | 字体一致 | 自动两位小数")
+
     st.header("1️⃣ 上传PDF模板")
     uploaded_file = st.file_uploader("选择PDF文件", type=["pdf"])
-    
+
     if uploaded_file is None:
         st.info("👆 请先上传PDF模板文件")
         return
-    
+
     pdf_bytes = uploaded_file.getvalue()
-    
+
     with st.spinner("正在提取字体..."):
         tmp_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         font_data = extract_font_data(tmp_doc)
         tmp_doc.close()
-    
+
     if font_data:
         st.success(f"✅ 字体提取成功 ({len(font_data)//1024}KB)")
     else:
         st.warning("⚠️ 无法提取字体")
         font_data = None
-    
+
     st.header("2️⃣ 填写字段数据")
     st.caption("留空表示不修改。数字自动添加两位小数")
-    
+
     values = {}
-    
+
     with st.expander("👥 第1行 - 从业人数", expanded=True):
         cols = st.columns(5)
         for col, label, key in zip(cols, ["Q1季初","Q1季末","Q2季初","Q2季末","Q3季末(总)"],
                                     ["eq1s","eq1e","eq2s","eq2e","eq3e"]):
             with col: values[key] = st.text_input(label, value="", key=key)
-    
+
     with st.expander("💰 第2行 - 资产总额", expanded=True):
         cols = st.columns(5)
         for col, label, key in zip(cols, ["Q1季初","Q1季末","Q2季初","Q2季末","Q3季末(总)"],
                                     ["aq1s","aq1e","aq2s","aq2e","aq3e"]):
             with col: values[key] = st.text_input(label, value="", key=key)
-    
+
     with st.expander("📊 第3-16行", expanded=True):
         col1, col2 = st.columns(2)
         left = [("L1","3 营业收入"),("L2","4 营业成本"),("L3","5 利润总额"),("L4","6 特定业务"),
@@ -230,7 +273,7 @@ def main():
             for k,l in left: values[k] = st.text_input(l, value="", key=k)
         with col2:
             for k,l in right: values[k] = st.text_input(l, value="", key=k)
-    
+
     with st.expander("📋 第16-25行"):
         col1, col2 = st.columns(2)
         left2 = [("L14","16 本期预缴"),("L15","17 减免其他"),("L16","18 本期应补(退)"),
@@ -241,7 +284,7 @@ def main():
             for k,l in left2: values[k] = st.text_input(l, value="", key=k)
         with col2:
             for k,l in right2: values[k] = st.text_input(l, value="", key=k)
-    
+
     with st.expander("✏️ 第2页 - 签章信息"):
         c1, c2 = st.columns(2)
         with c1:
@@ -250,14 +293,14 @@ def main():
         with c2:
             values["receiver"] = st.text_input("受理人", value="", key="receiver")
             values["receive_date"] = st.text_input("受理日期", value="", key="receive_date")
-    
+
     st.header("3️⃣ 生成PDF")
     filled = {k: v.strip() for k, v in values.items() if v.strip()}
     if filled:
         st.success(f"✅ 已填写 {len(filled)} 个字段")
     else:
         st.info("💡 尚未填写任何字段")
-    
+
     if st.button("🚀 生成填好的PDF", type="primary", disabled=len(filled)==0):
         with st.spinner("正在生成..."):
             try:
@@ -268,9 +311,9 @@ def main():
             except Exception as e:
                 st.error(f"❌ 生成失败: {e}")
                 st.exception(e)
-    
+
     st.markdown("---")
-    st.markdown("<center>PDF智能填表系统 v8.3 逗号修复+右对齐统一版 | 方框线对称保护</center>", unsafe_allow_html=True)
+    st.markdown("<center>PDF智能填表系统 v8.4 逗号修复最终版 | 方框线对称保护</center>", unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
