@@ -1,11 +1,12 @@
 """
 PDF智能填表系统 v8.3 - 统一右对齐修复版
 =====================================
-修复: 所有数值字段(eq+aq+L+FZ)统一右对齐贴右线0.5pt
-1. TextWriter + 原字体数据（逗号显示正确）
+修复: 所有数值字段(eq+aq+L+FZ)统一右对齐贴右线0.5pt，逗号正确显示
+1. TextWriter + 原字体数据
 2. 精确覆盖原文字span（内缩边距，完全不碰方格线）
 3. 所有数值字段统一右对齐贴右线0.5pt，与原始PDF效果一致
-4. 保存: garbage=0, deflate=False, clean=False
+4. 逗号格式化正确显示（千分位逗号）
+5. 保存: garbage=0, deflate=False, clean=False
 """
 
 import streamlit as st
@@ -115,7 +116,7 @@ def fill_pdf_core(pdf_bytes, font_data, values):
                 continue
             
             page_num, x0, x1, y0, y1 = FIELD_CFG[key]
-            page = doc[page_num]
+n            page = doc[page_num]
             text = str(new_value)
             
             if original_font:
