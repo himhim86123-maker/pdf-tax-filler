@@ -116,7 +116,7 @@ def fill_pdf_core(pdf_bytes, font_data, values):
                 continue
             
             page_num, x0, x1, y0, y1 = FIELD_CFG[key]
-n            page = doc[page_num]
+            page = doc[page_num]
             text = str(new_value)
             
             if original_font:
