@@ -141,4 +141,127 @@ def fill_pdf_core(pdf_bytes, font_data, values):
                 for line in b["lines"]:
                     for span in line["spans"]:
                         sb = span["bbox"]
-                        if sb[0] >= x0 - 1 and sb[2] <= x1 + 1 and sb[1] >= y0 - 1 and sb[3] <= y
+                        if sb[0] >= x0 - 1 and sb[2] <= x1 + 1 and sb[1] >= y0 - 1 and sb[3] <= y1 + 1:
+                            cover_left   = max(sb[0] + INSET, x0 + INSET)
+                            cover_right  = min(sb[2] - INSET, x1 - INSET)
+                            cover_top    = max(sb[1] + INSET, y0 + INSET)
+                            cover_bottom = min(sb[3] - INSET, y1 - INSET)
+                            
+                            if cover_right > cover_left and cover_bottom > cover_top:
+                                cover_rect = fitz.Rect(cover_left, cover_top, cover_right, cover_bottom)
+                                shape = page.new_shape()
+                                shape.draw_rect(cover_rect)
+                                shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
+                                shape.commit()
+            
+            if original_font:
+                twriter = fitz.TextWriter(page.rect)
+                twriter.append(fitz.Point(write_x, origin_y), text, font=original_font, fontsize=8)
+                twriter.write_text(page, color=(0, 0, 0))
+            else:
+                page.insert_text((write_x, origin_y), text, fontname="SimSun", fontsize=8, color=(0, 0, 0))
+        
+        output = io.BytesIO()
+        doc.save(output, garbage=0, deflate=False, clean=False)
+        output.seek(0)
+        return output.getvalue()
+    finally:
+        doc.close()
+
+
+def main():
+    st.title("📄 PDF智能填表系统 v8.1")
+    st.markdown("完美修复版 | 方框线对称保护 | 逗号正确 | 字体一致 | 自动两位小数")
+    
+    st.header("1️⃣ 上传PDF模板")
+    uploaded_file = st.file_uploader("选择PDF文件", type=["pdf"])
+    
+    if uploaded_file is None:
+        st.info("👆 请先上传PDF模板文件")
+        return
+    
+    pdf_bytes = uploaded_file.getvalue()
+    
+    with st.spinner("正在提取字体..."):
+        tmp_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        font_data = extract_font_data(tmp_doc)
+        tmp_doc.close()
+    
+    if font_data:
+        st.success(f"✅ 字体提取成功 ({len(font_data)//1024}KB)")
+    else:
+        st.warning("⚠️ 无法提取字体")
+        font_data = None
+    
+    st.header("2️⃣ 填写字段数据")
+    st.caption("留空表示不修改。数字自动添加两位小数")
+    
+    values = {}
+    
+    with st.expander("👥 第1行 - 從業人數", expanded=True):
+        cols = st.columns(5)
+        for col, label, key in zip(cols, ["Q1季初","Q1季末","Q2季初","Q2季末","Q3季末(總)"],
+                                    ["eq1s","eq1e","eq2s","eq2e","eq3e"]):
+            with col: values[key] = st.text_input(label, value="", key=key)
+    
+    with st.expander("💰 第2行 - 資產總額", expanded=True):
+        cols = st.columns(5)
+        for col, label, key in zip(cols, ["Q1季初","Q1季末","Q2季初","Q2季末","Q3季末(總)"],
+                                    ["aq1s","aq1e","aq2s","aq2e","aq3e"]):
+            with col: values[key] = st.text_input(label, value="", key=key)
+    
+    with st.expander("📊 第3-16行", expanded=True):
+        col1, col2 = st.columns(2)
+        left = [("L1","3 營業收入"),("L2","4 營業成本"),("L3","5 利潤總額"),("L4","6 特定業務"),
+                ("L5","7 不徵稅收入"),("L6","8 減：資產加速折舊"),("L7","9 減：免稅收入")]
+        right = [("L8","10 減：所得減免"),("L9","11 減：所得減免其他"),("L10","12 實際利潤額"),
+                 ("L11","13 稅率(25%)"),("L12","14 應納所得稅額"),("L13","15 減免所得稅額"),("L13_1","15.1 減免明細")]
+        with col1:
+            for k,l in left: values[k] = st.text_input(l, value="", key=k)
+        with col2:
+            for k,l in right: values[k] = st.text_input(l, value="", key=k)
+    
+    with st.expander("📋 第16-25行"):
+        col1, col2 = st.columns(2)
+        left2 = [("L14","16 本期預繳"),("L15","17 減免其他"),("L16","18 本期應補(退)"),
+                 ("L17","19 總機構本期"),("L18","20 總機構分攤"),("L19","21 財政集中")]
+        right2 = [("L20","22 分支機構"),("L21","23 分攤比例"),("L22","24 稅率"),
+                  ("FZ1","附1 中央級收入"),("FZ2","附2 地方級收入"),("L23","25 減免地方")]
+        with col1:
+            for k,l in left2: values[k] = st.text_input(l, value="", key=k)
+        with col2:
+            for k,l in right2: values[k] = st.text_input(l, value="", key=k)
+    
+    with st.expander("✏️ 第2頁 - 签章信息"):
+        c1, c2 = st.columns(2)
+        with c1:
+            values["agent_name"] = st.text_input("经办人", value="", key="agent_name")
+            values["agent_id"] = st.text_input("经办人身份证号", value="", key="agent_id")
+        with c2:
+            values["receiver"] = st.text_input("受理人", value="", key="receiver")
+            values["receive_date"] = st.text_input("受理日期", value="", key="receive_date")
+    
+    st.header("3️⃣ 生成PDF")
+    filled = {k: v.strip() for k, v in values.items() if v.strip()}
+    if filled:
+        st.success(f"✅ 已填写 {len(filled)} 个字段")
+    else:
+        st.info("💡 尚未填写任何字段")
+    
+    if st.button("🚀 生成填好的PDF", type="primary", disabled=len(filled)==0):
+        with st.spinner("正在生成..."):
+            try:
+                result = fill_pdf_core(pdf_bytes, font_data, filled)
+                st.success("✅ PDF生成成功！")
+                st.download_button("📥 下载填好的PDF", result, "filled_tax_form.pdf",
+                                   mime="application/pdf", use_container_width=True)
+            except Exception as e:
+                st.error(f"❌ 生成失败: {e}")
+                st.exception(e)
+    
+    st.markdown("---")
+    st.markdown("<center>PDF智能填表系统 v8.1 完美修复版 | 方框线对称保护</center>", unsafe_allow_html=True)
+
+
+if __name__ == "__main__":
+    main()
