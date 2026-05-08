@@ -1,8 +1,8 @@
 """
-PDF智能填表系统 v8.4 - 逗号修复最终版
+PDF智能填表系统 v8.4 - 最终确认版
 =====================================
-修复: TextWriter 逐字符 append() 写入，确保逗号正确显示
-1. TextWriter + 逐字符写入（逗号/小数点/数字分别控制宽度）
+修复: 改用 page.insert_text 逐字符写入，确保逗号正确显示
+1. page.insert_text 逐字符写入（每个字符独立调用）
 2. 精确覆盖原文字span（内缩边距，完全不碰方格线）
 3. 所有数值字段统一右对齐
 4. eq/aq: 右间距0.5pt | L/FZ: 右间距0.2pt
@@ -67,59 +67,6 @@ def fmt_decimal(value, field_key):
         return text
 
 
-def calc_text_width(text):
-    """计算逐字符写入时的总宽度"""
-    total = 0
-    for char in text:
-        if char == ',':
-            total += COMMA_W
-        elif char == '.':
-            total += DOT_W
-        else:
-            total += CHAR_W
-    return total
-
-
-def write_field_tw(page, font, x0, x1, y0, y1, text, right_margin=0.2):
-    """
-    TextWriter 逐字符写入
-    关键: 逗号/小数点/数字分别控制宽度，确保逗号正确显示
-    """
-    # 1. 覆盖原文字
-    INSET = 0.8
-    for b in page.get_text("dict")["blocks"]:
-        if "lines" not in b:
-            continue
-        for line in b["lines"]:
-            for span in line["spans"]:
-                sb = span["bbox"]
-                if sb[0] >= x0 - 1 and sb[2] <= x1 + 1 and sb[1] >= y0 - 1 and sb[3] <= y1 + 1:
-                    cover_rect = fitz.Rect(sb[0] + INSET, sb[1] + INSET, sb[2] - INSET, sb[3] - INSET)
-                    shape = page.new_shape()
-                    shape.draw_rect(cover_rect)
-                    shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
-                    shape.commit()
-
-    # 2. TextWriter 逐字符写入
-    origin_y = y0 + (y1 - y0) * 0.75
-    right_edge = x1 - right_margin
-    total_width = calc_text_width(text)
-    current_x = right_edge - total_width
-
-    tw = fitz.TextWriter(page.rect)
-    for char in text:
-        if char == ',':
-            tw.append((current_x, origin_y), char, font=font, fontsize=FONTSIZE)
-            current_x += COMMA_W
-        elif char == '.':
-            tw.append((current_x, origin_y), char, font=font, fontsize=FONTSIZE)
-            current_x += DOT_W
-        else:
-            tw.append((current_x, origin_y), char, font=font, fontsize=FONTSIZE)
-            current_x += CHAR_W
-    tw.write_text(page, color=(0, 0, 0))
-
-
 FIELD_CFG = {
     # --- 第1行: 从业人数 (右间距0.5pt) ---
     "eq1s":  (0, 100.6, 152.3, 164.8, 183.6, 0.5),
@@ -179,12 +126,6 @@ def fill_pdf_core(pdf_bytes, font_data, values):
         os.close(fd)
 
     try:
-        # 创建字体对象
-        if fontfile_path:
-            font = fitz.Font(fontfile=fontfile_path)
-        else:
-            font = None
-
         for key, raw_value in values.items():
             if not raw_value or key not in FIELD_CFG:
                 continue
@@ -197,20 +138,65 @@ def fill_pdf_core(pdf_bytes, font_data, values):
             page = doc[page_num]
             text = str(new_value)
 
-            # 签章字段用简单左对齐
+            # 1. 覆盖原文字
+            INSET = 0.8
+            for b in page.get_text("dict")["blocks"]:
+                if "lines" not in b:
+                    continue
+                for line in b["lines"]:
+                    for span in line["spans"]:
+                        sb = span["bbox"]
+                        if sb[0] >= x0 - 1 and sb[2] <= x1 + 1 and sb[1] >= y0 - 1 and sb[3] <= y1 + 1:
+                            cover_left = max(sb[0] + INSET, x0 + INSET)
+                            cover_right = min(sb[2] - INSET, x1 - INSET)
+                            cover_top = max(sb[1] + INSET, y0 + INSET)
+                            cover_bottom = min(sb[3] - INSET, y1 - INSET)
+                            if cover_right > cover_left and cover_bottom > cover_top:
+                                cover_rect = fitz.Rect(cover_left, cover_top, cover_right, cover_bottom)
+                                shape = page.new_shape()
+                                shape.draw_rect(cover_rect)
+                                shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
+                                shape.commit()
+
+            # 2. 写入新文字
+            origin_y = y0 + (y1 - y0) * 0.75
+
             if key in ["agent_name", "agent_id", "receiver", "receive_date"]:
-                origin_y = y0 + (y1 - y0) * 0.75
+                # 签章字段: 左对齐
                 write_x = x0 + 2.0
-                if font:
-                    tw = fitz.TextWriter(page.rect)
-                    tw.append((write_x, origin_y), text, font=font, fontsize=FONTSIZE)
-                    tw.write_text(page, color=(0, 0, 0))
+                if fontfile_path:
+                    page.insert_text((write_x, origin_y), text, fontname="SimSun",
+                                   fontfile=fontfile_path, fontsize=FONTSIZE, color=(0, 0, 0))
                 else:
                     page.insert_text((write_x, origin_y), text, fontname="china-ss",
-                                     fontsize=FONTSIZE, color=(0, 0, 0))
+                                   fontsize=FONTSIZE, color=(0, 0, 0))
             else:
-                # 数值字段用 TextWriter 逐字符写入
-                write_field_tw(page, font, x0, x1, y0, y1, text, right_margin)
+                # 数值字段: page.insert_text 逐字符写入
+                total_width = 0
+                for char in text:
+                    if char == ',':
+                        total_width += COMMA_W
+                    elif char == '.':
+                        total_width += DOT_W
+                    else:
+                        total_width += CHAR_W
+
+                current_x = (x1 - right_margin) - total_width
+
+                for char in text:
+                    if fontfile_path:
+                        page.insert_text((current_x, origin_y), char, fontname="SimSun",
+                                       fontfile=fontfile_path, fontsize=FONTSIZE, color=(0, 0, 0))
+                    else:
+                        page.insert_text((current_x, origin_y), char, fontname="china-ss",
+                                       fontsize=FONTSIZE, color=(0, 0, 0))
+
+                    if char == ',':
+                        current_x += COMMA_W
+                    elif char == '.':
+                        current_x += DOT_W
+                    else:
+                        current_x += CHAR_W
 
         output = io.BytesIO()
         doc.save(output, garbage=0, deflate=False, clean=False)
@@ -224,7 +210,7 @@ def fill_pdf_core(pdf_bytes, font_data, values):
 
 def main():
     st.title("📄 PDF智能填表系统 v8.4")
-    st.markdown("逗号修复最终版 | 方框线对称保护 | 字体一致 | 自动两位小数")
+    st.markdown("最终确认版 | 逗号修复 | 方框线对称保护 | 字体一致 | 自动两位小数")
 
     st.header("1️⃣ 上传PDF模板")
     uploaded_file = st.file_uploader("选择PDF文件", type=["pdf"])
@@ -313,7 +299,7 @@ def main():
                 st.exception(e)
 
     st.markdown("---")
-    st.markdown("<center>PDF智能填表系统 v8.4 逗号修复最终版 | 方框线对称保护</center>", unsafe_allow_html=True)
+    st.markdown("<center>PDF智能填表系统 v8.4 最终确认版 | 逗号修复 | 方框线对称保护</center>", unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
