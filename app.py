@@ -1,14 +1,49 @@
 """
-PDF智能填表系统 v5.1 - 修复版
-修复：移除字体文件提取，直接使用PDF内置SimSun字体
+PDF智能填表系统 v6.0 - 最终修复版
+修复：从上传的PDF提取字体保存到/tmp/，再用fontfile引用
 """
 
 import streamlit as st
 import fitz
+import os
 import io
 
 st.set_page_config(page_title="PDF智能填表系统", layout="wide")
 
+
+# ============================================================
+# 字体提取（从PDF中提取SimSun字体保存到/tmp/）
+# ============================================================
+
+def extract_and_save_font(doc):
+    """从PDF中提取SimSun字体并保存到/tmp/"""
+    try:
+        for xref in range(1, doc.xref_length()):
+            try:
+                obj = doc.xref_object(xref)
+                if not obj:
+                    continue
+                if "/FontFile2" in obj:
+                    import re
+                    match = re.search(r'/FontFile2\s+(\d+)', obj)
+                    if match:
+                        ff2_xref = int(match.group(1))
+                        data = doc.xref_stream(ff2_xref)
+                        if data and len(data) > 1000:
+                            font_path = "/tmp/simsun_font.ttf"
+                            with open(font_path, "wb") as f:
+                                f.write(data)
+                            return font_path
+            except:
+                continue
+    except:
+        pass
+    return None
+
+
+# ============================================================
+# 字符宽度（技术档案精确值）
+# ============================================================
 
 def char_width(ch):
     if ch in '0123456789%':
@@ -23,6 +58,10 @@ def char_width(ch):
 def measure_width(text):
     return sum(char_width(c) for c in str(text))
 
+
+# ============================================================
+# 格式化
+# ============================================================
 
 def fmt_decimal(value, field_key):
     if not value or not str(value).strip():
@@ -39,6 +78,10 @@ def fmt_decimal(value, field_key):
     except:
         return text
 
+
+# ============================================================
+# 字段配置
+# ============================================================
 
 FIELD_CFG = {
     "eq1s":  (0, 147.9, 151.9, 170.2, 178.2),
@@ -84,7 +127,11 @@ FIELD_CFG = {
 }
 
 
-def fill_pdf_core(pdf_bytes, values):
+# ============================================================
+# PDF填写核心函数
+# ============================================================
+
+def fill_pdf_core(pdf_bytes, font_path, values):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     
     try:
@@ -118,9 +165,11 @@ def fill_pdf_core(pdf_bytes, values):
             shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
             shape.commit()
             
-            # 写入新文字（直接使用PDF内置SimSun字体，不加载外部字体文件）
-            page.insert_text((write_x, origin_y), text,
-                             fontname="SimSun", fontsize=8, color=(0, 0, 0))
+            # 写入新文字（使用从PDF提取的字体文件）
+            kwargs = {"fontname": "SimSun", "fontsize": 8, "color": (0, 0, 0)}
+            if font_path and os.path.exists(font_path):
+                kwargs["fontfile"] = font_path
+            page.insert_text((write_x, origin_y), text, **kwargs)
         
         output = io.BytesIO()
         doc.save(output, garbage=0, deflate=False, clean=False)
@@ -130,19 +179,41 @@ def fill_pdf_core(pdf_bytes, values):
         doc.close()
 
 
+# ============================================================
+# Streamlit UI
+# ============================================================
+
 def main():
-    st.title("PDF智能填表系统 v5.1")
-    st.markdown("完美版 | 方格线完整保证 | 字体完全一致 | 自动两位小数")
+    st.title("📄 PDF智能填表系统 v6.0")
+    st.markdown("最终修复版 | 字体提取修复 | 方格线完整 | 自动两位小数")
     
     st.header("1️⃣ 上传PDF模板")
     uploaded_file = st.file_uploader("选择PDF文件", type=["pdf"])
     
     if uploaded_file is None:
         st.info("👆 请先上传PDF模板文件")
+        st.markdown("""
+        **使用步骤：**
+        1. 上传原始PDF模板
+        2. 在下方输入框填写新数值（留空=不修改）
+        3. 点击「生成填好的PDF」按钮
+        4. 下载生成的PDF文件
+        """)
         return
     
     pdf_bytes = uploaded_file.getvalue()
-    st.success("✅ PDF模板已上传")
+    
+    # 从上传的PDF中提取字体
+    with st.spinner("正在提取字体..."):
+        tmp_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        font_path = extract_and_save_font(tmp_doc)
+        tmp_doc.close()
+    
+    if font_path:
+        st.success(f"✅ SimSun字体提取成功 ({os.path.getsize(font_path)//1024}KB)")
+    else:
+        st.warning("⚠️ 无法提取字体，将尝试使用系统字体")
+        font_path = None
     
     st.header("2️⃣ 填写字段数据")
     st.caption("留空表示不修改。数字自动添加两位小数（從業人數和签章字段除外）")
@@ -178,41 +249,4 @@ def main():
                  ("L17","19 總機構本期"),("L18","20 總機構分攤"),("L19","21 財政集中")]
         right2 = [("L20","22 分支機構"),("L21","23 分攤比例"),("L22","24 稅率"),
                   ("FZ1","附1 中央級收入"),("FZ2","附2 地方級收入"),("L23","25 減免地方")]
-        with col1:
-            for k,l in left2: values[k] = st.text_input(l, value="", key=k)
-        with col2:
-            for k,l in right2: values[k] = st.text_input(l, value="", key=k)
-    
-    with st.expander("✏️ 第2頁 - 签章信息"):
-        c1, c2 = st.columns(2)
-        with c1:
-            values["agent_name"] = st.text_input("经办人", value="", key="agent_name")
-            values["agent_id"] = st.text_input("经办人身份证号", value="", key="agent_id")
-        with c2:
-            values["receiver"] = st.text_input("受理人", value="", key="receiver")
-            values["receive_date"] = st.text_input("受理日期", value="", key="receive_date")
-    
-    st.header("3️⃣ 生成PDF")
-    filled = {k: v.strip() for k, v in values.items() if v.strip()}
-    if filled:
-        st.success(f"✅ 已填写 {len(filled)} 个字段")
-    else:
-        st.info("💡 尚未填写任何字段")
-    
-    if st.button("🚀 生成填好的PDF", type="primary", disabled=len(filled)==0):
-        with st.spinner("正在生成..."):
-            try:
-                result = fill_pdf_core(pdf_bytes, filled)
-                st.success("✅ PDF生成成功！")
-                st.download_button("📥 下载填好的PDF", result, "filled_tax_form.pdf",
-                                   mime="application/pdf", use_container_width=True)
-            except Exception as e:
-                st.error(f"❌ 生成失败: {e}")
-                st.exception(e)
-    
-    st.markdown("---")
-    st.markdown("<center>PDF智能填表系统 v5.1 修复版</center>", unsafe_allow_html=True)
-
-
-if __name__ == "__main__":
-    main()
+        with col1
