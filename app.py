@@ -1,17 +1,19 @@
 """
-PDF智能填表系统 v8.3 - 统一右对齐修复版
+PDF智能填表系统 v8.3 - 逗号修复+右对齐统一版
 =====================================
-修复: 所有数值字段(eq+aq+L+FZ)统一右对齐贴右线0.5pt，逗号正确显示
-1. TextWriter + 原字体数据
-2. 精确覆盖原文字span（内缩边距，完全不碰方格线）
-3. 所有数值字段统一右对齐贴右线0.5pt，与原始PDF效果一致
-4. 逗号格式化正确显示（千分位逗号）
+修复: 
+1. 改用 page.insert_text + fontfile 确保逗号正确显示
+2. 所有数值字段(eq+aq+L+FZ)统一右对齐
+3. eq/aq: 右间距0.5pt | L/FZ: 右间距0.2pt
+4. 精确覆盖原文字span（内缩边距，完全不碰方格线）
 5. 保存: garbage=0, deflate=False, clean=False
 """
 
 import streamlit as st
 import fitz
 import io
+import os
+import tempfile
 
 st.set_page_config(page_title="PDF智能填表系统", layout="wide")
 
@@ -104,9 +106,13 @@ FIELD_CFG = {
 def fill_pdf_core(pdf_bytes, font_data, values):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     
+    fontfile_path = None
+    if font_data:
+        fd, fontfile_path = tempfile.mkstemp(suffix=".ttf")
+        os.write(fd, font_data)
+        os.close(fd)
+    
     try:
-        original_font = fitz.Font(fontbuffer=font_data) if font_data else None
-        
         for key, raw_value in values.items():
             if not raw_value or key not in FIELD_CFG:
                 continue
@@ -119,15 +125,18 @@ def fill_pdf_core(pdf_bytes, font_data, values):
             page = doc[page_num]
             text = str(new_value)
             
-            if original_font:
-                tw = original_font.text_length(text, fontsize=8)
+            if fontfile_path:
+                tmp_font = fitz.Font(fontfile=fontfile_path)
+                tw = tmp_font.text_length(text, fontsize=8)
             else:
                 tw = len(text) * 4.5
             
             origin_y = y0 + (y1 - y0) * 0.75
             
-            if key.startswith("eq") or key.startswith("aq") or key.startswith("L") or key.startswith("FZ"):
+            if key.startswith("eq") or key.startswith("aq"):
                 write_x = x1 - 0.5 - tw
+            elif key.startswith("L") or key.startswith("FZ"):
+                write_x = x1 - 0.2 - tw
             elif key in ["agent_name", "agent_id", "receiver", "receive_date"]:
                 write_x = x0 + 2.0
             else:
@@ -153,12 +162,12 @@ def fill_pdf_core(pdf_bytes, font_data, values):
                                 shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
                                 shape.commit()
             
-            if original_font:
-                twriter = fitz.TextWriter(page.rect)
-                twriter.append(fitz.Point(write_x, origin_y), text, font=original_font, fontsize=8)
-                twriter.write_text(page, color=(0, 0, 0))
+            if fontfile_path:
+                page.insert_text((write_x, origin_y), text, fontname="SimSun",
+                               fontfile=fontfile_path, fontsize=8, color=(0, 0, 0))
             else:
-                page.insert_text((write_x, origin_y), text, fontname="SimSun", fontsize=8, color=(0, 0, 0))
+                page.insert_text((write_x, origin_y), text, fontname="china-ss",
+                               fontsize=8, color=(0, 0, 0))
         
         output = io.BytesIO()
         doc.save(output, garbage=0, deflate=False, clean=False)
@@ -166,11 +175,13 @@ def fill_pdf_core(pdf_bytes, font_data, values):
         return output.getvalue()
     finally:
         doc.close()
+        if fontfile_path and os.path.exists(fontfile_path):
+            os.unlink(fontfile_path)
 
 
 def main():
     st.title("📄 PDF智能填表系统 v8.3")
-    st.markdown("统一右对齐修复版 | 方框线对称保护 | 逗号正确 | 字体一致 | 自动两位小数")
+    st.markdown("逗号修复+右对齐统一版 | 方框线对称保护 | 字体一致 | 自动两位小数")
     
     st.header("1️⃣ 上传PDF模板")
     uploaded_file = st.file_uploader("选择PDF文件", type=["pdf"])
@@ -259,7 +270,7 @@ def main():
                 st.exception(e)
     
     st.markdown("---")
-    st.markdown("<center>PDF智能填表系统 v8.3 统一右对齐修复版 | 方框线对称保护</center>", unsafe_allow_html=True)
+    st.markdown("<center>PDF智能填表系统 v8.3 逗号修复+右对齐统一版 | 方框线对称保护</center>", unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
