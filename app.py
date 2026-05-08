@@ -249,4 +249,41 @@ def main():
                  ("L17","19 總機構本期"),("L18","20 總機構分攤"),("L19","21 財政集中")]
         right2 = [("L20","22 分支機構"),("L21","23 分攤比例"),("L22","24 稅率"),
                   ("FZ1","附1 中央級收入"),("FZ2","附2 地方級收入"),("L23","25 減免地方")]
-        with col1
+        with col1:
+            for k,l in left2: values[k] = st.text_input(l, value="", key=k)
+        with col2:
+            for k,l in right2: values[k] = st.text_input(l, value="", key=k)
+    
+    with st.expander("✏️ 第2頁 - 签章信息"):
+        c1, c2 = st.columns(2)
+        with c1:
+            values["agent_name"] = st.text_input("经办人", value="", key="agent_name")
+            values["agent_id"] = st.text_input("经办人身份证号", value="", key="agent_id")
+        with c2:
+            values["receiver"] = st.text_input("受理人", value="", key="receiver")
+            values["receive_date"] = st.text_input("受理日期", value="", key="receive_date")
+    
+    st.header("3️⃣ 生成PDF")
+    filled = {k: v.strip() for k, v in values.items() if v.strip()}
+    if filled:
+        st.success(f"✅ 已填写 {len(filled)} 个字段")
+    else:
+        st.info("💡 尚未填写任何字段")
+    
+    if st.button("🚀 生成填好的PDF", type="primary", disabled=len(filled)==0):
+        with st.spinner("正在生成..."):
+            try:
+                result = fill_pdf_core(pdf_bytes, font_path, filled)
+                st.success("✅ PDF生成成功！")
+                st.download_button("📥 下载填好的PDF", result, "filled_tax_form.pdf",
+                                   mime="application/pdf", use_container_width=True)
+            except Exception as e:
+                st.error(f"❌ 生成失败: {e}")
+                st.exception(e)
+    
+    st.markdown("---")
+    st.markdown("<center>PDF智能填表系统 v6.0 最终修复版</center>", unsafe_allow_html=True)
+
+
+if __name__ == "__main__":
+    main()
