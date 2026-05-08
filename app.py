@@ -1,11 +1,10 @@
 """
-PDF智能填表系统 v7.2 - 最终版
-================================
-1. TextWriter + 原字体数据写入（逗号显示正确）
-2. 覆盖整个方格 + 重画方格线（线连续不断开）
+PDF智能填表系统 v8.0 - 最终完美版
+=====================================
+1. TextWriter + 原字体数据（逗号显示正确）
+2. 精确覆盖原文字span（不碰方格线，无线变幼/双线）
 3. 右边距 0.3pt（紧贴线）
-4. font.text_length() 精确测量宽度
-5. 保存: garbage=0, deflate=False, clean=False
+4. 保存: garbage=0, deflate=False, clean=False
 """
 
 import streamlit as st
@@ -16,7 +15,6 @@ st.set_page_config(page_title="PDF智能填表系统", layout="wide")
 
 
 def extract_font_data(doc):
-    """从PDF提取原始SimSun字体数据"""
     try:
         data = doc.xref_stream(5)
         if data and len(data) > 1000:
@@ -134,29 +132,26 @@ def fill_pdf_core(pdf_bytes, font_data, values):
             else:
                 write_x = (x1 - 0.3) - tw
             
-            # 1. 白色矩形覆盖整个方格
-            cover_rect = fitz.Rect(x0, y0, x1, y1)
-            shape = page.new_shape()
-            shape.draw_rect(cover_rect)
-            shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
-            shape.commit()
+            # === 精确覆盖方格内的原文字spans（不碰方格线）===
+            for b in page.get_text("dict")["blocks"]:
+                if "lines" not in b:
+                    continue
+                for line in b["lines"]:
+                    for span in line["spans"]:
+                        sb = span["bbox"]
+                        if sb[0] >= x0 - 1 and sb[2] <= x1 + 1 and sb[1] >= y0 - 1 and sb[3] <= y1 + 1:
+                            cover_rect = fitz.Rect(sb[0], sb[1], sb[2], sb[3])
+                            shape = page.new_shape()
+                            shape.draw_rect(cover_rect)
+                            shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
+                            shape.commit()
             
-            # 2. TextWriter写入新文字
             if original_font:
                 twriter = fitz.TextWriter(page.rect)
                 twriter.append(fitz.Point(write_x, origin_y), text, font=original_font, fontsize=8)
                 twriter.write_text(page, color=(0, 0, 0))
             else:
                 page.insert_text((write_x, origin_y), text, fontname="SimSun", fontsize=8, color=(0, 0, 0))
-            
-            # 3. 重画方格线（width=0.5）
-            shape = page.new_shape()
-            shape.draw_line(fitz.Point(x0, y0), fitz.Point(x1, y0))
-            shape.draw_line(fitz.Point(x0, y1), fitz.Point(x1, y1))
-            shape.draw_line(fitz.Point(x0, y0), fitz.Point(x0, y1))
-            shape.draw_line(fitz.Point(x1, y0), fitz.Point(x1, y1))
-            shape.finish(color=(0, 0, 0), width=0.5)
-            shape.commit()
         
         output = io.BytesIO()
         doc.save(output, garbage=0, deflate=False, clean=False)
@@ -167,8 +162,8 @@ def fill_pdf_core(pdf_bytes, font_data, values):
 
 
 def main():
-    st.title("📄 PDF智能填表系统 v7.2")
-    st.markdown("最终版 | TextWriter字体 | 重画方格线 | 逗号正确 | 自动两位小数")
+    st.title("📄 PDF智能填表系统 v8.0")
+    st.markdown("完美版 | 精确覆盖不碰线 | 逗号正确 | 字体一致 | 自动两位小数")
     
     st.header("1️⃣ 上传PDF模板")
     uploaded_file = st.file_uploader("选择PDF文件", type=["pdf"])
@@ -257,7 +252,7 @@ def main():
                 st.exception(e)
     
     st.markdown("---")
-    st.markdown("<center>PDF智能填表系统 v7.2 最终版</center>", unsafe_allow_html=True)
+    st.markdown("<center>PDF智能填表系统 v8.0 完美版 | 不重画方格线</center>", unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
