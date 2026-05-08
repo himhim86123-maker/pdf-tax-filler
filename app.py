@@ -1,10 +1,10 @@
 """
-PDF智能填表系统 v8.3 - 资产总额右对齐修复版
+PDF智能填表系统 v8.3 - 统一右对齐修复版
 =====================================
-修复: eq+aq系列字段(从业人数+资产总额)统一右对齐贴右线
+修复: 所有数值字段(eq+aq+L+FZ)统一右对齐贴右线0.5pt
 1. TextWriter + 原字体数据（逗号显示正确）
 2. 精确覆盖原文字span（内缩边距，完全不碰方格线）
-3. eq+aq字段统一右对齐贴右线0.5pt，与原始PDF效果一致
+3. 所有数值字段统一右对齐贴右线0.5pt，与原始PDF效果一致
 4. 保存: garbage=0, deflate=False, clean=False
 """
 
@@ -125,7 +125,7 @@ def fill_pdf_core(pdf_bytes, font_data, values):
             
             origin_y = y0 + (y1 - y0) * 0.75
             
-            if key.startswith("eq") or key.startswith("aq"):
+            if key.startswith("eq") or key.startswith("aq") or key.startswith("L") or key.startswith("FZ"):
                 write_x = x1 - 0.5 - tw
             elif key in ["agent_name", "agent_id", "receiver", "receive_date"]:
                 write_x = x0 + 2.0
@@ -169,7 +169,7 @@ def fill_pdf_core(pdf_bytes, font_data, values):
 
 def main():
     st.title("📄 PDF智能填表系统 v8.3")
-    st.markdown("从业人数+资产总额右对齐修复版 | 方框线对称保护 | 逗号正确 | 字体一致 | 自动两位小数")
+    st.markdown("统一右对齐修复版 | 方框线对称保护 | 逗号正确 | 字体一致 | 自动两位小数")
     
     st.header("1️⃣ 上传PDF模板")
     uploaded_file = st.file_uploader("选择PDF文件", type=["pdf"])
@@ -258,7 +258,7 @@ def main():
                 st.exception(e)
     
     st.markdown("---")
-    st.markdown("<center>PDF智能填表系统 v8.3 从业人数+资产总额右对齐修复版 | 方框线对称保护</center>", unsafe_allow_html=True)
+    st.markdown("<center>PDF智能填表系统 v8.3 统一右对齐修复版 | 方框线对称保护</center>", unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
