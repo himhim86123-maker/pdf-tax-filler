@@ -1,77 +1,74 @@
 """
-PDF智能填表系统 v3.0 - 最终修正版
-=====================================
-1. 所有右对齐字段使用精确的方格右边线 (x=565.5)
-2. 所有居中字段使用方格中心点
-3. 覆盖区域覆盖整个方格，确保原文字完全被清除
-4. 新增4个签章字段（经办人、身份证号、受理人、受理日期）
-5. 自动添加两位小数功能（從業人數除外）
+PDF智能填表系统 v5.0 - 完美版
+================================
+严格遵循技术档案参数：
+- 覆盖矩形四周留1.0pt余量，不碰边框线
+- 不重绘边框线（避免双线叠加）
+- 字符宽度：数字/字母=4.0pt, 逗号=2.5pt, 小数点=2.0pt
+- origin_y = y0 + (y1-y0)*0.75
+- 保存: garbage=0, deflate=False, clean=False
 """
 
 import streamlit as st
-import fitz  # PyMuPDF
+import fitz
 import os
 import io
 
 st.set_page_config(page_title="PDF智能填表系统", layout="wide")
 
+
 # ============================================================
-# 字体处理
+# 字体提取
 # ============================================================
 
-def extract_font_from_pdf(pdf_path):
-    """从PDF中提取SimSun字体数据"""
-    doc = fitz.open(pdf_path)
-    try:
-        font_data = None
-        for xref in range(1, doc.xref_length()):
-            try:
-                obj = doc.xref_object(xref)
-                if obj and "FontFile2" in obj:
-                    font_data = doc.xref_stream(xref)
-                    if font_data and len(font_data) > 1000:
-                        break
-            except:
+def extract_font(doc):
+    """提取PDF内嵌的SimSun字体"""
+    font_data = None
+    for xref in range(1, doc.xref_length()):
+        try:
+            obj = doc.xref_object(xref)
+            if not obj:
                 continue
-        if not font_data:
-            for xref in range(1, doc.xref_length()):
-                try:
-                    if doc.xref_get_key(xref, "Subtype")[1] == "/TrueType":
-                        font_data = doc.xref_stream(xref)
-                        if font_data and len(font_data) > 1000:
-                            break
-                except:
-                    continue
-        if not font_data:
-            best_size = 0
-            for xref in range(1, doc.xref_length()):
-                try:
-                    data = doc.xref_stream(xref)
-                    if data and len(data) > best_size:
-                        best_size = len(data)
-                        font_data = data
-                except:
-                    continue
-        return font_data
-    finally:
-        doc.close()
-
-def save_font_temp(pdf_path):
-    """保存字体到临时文件"""
-    font_data = extract_font_from_pdf(pdf_path)
+            if "FontFile2" in obj:
+                data = doc.xref_stream(xref)
+                if data and len(data) > 1000:
+                    font_data = data
+                    break
+        except:
+            continue
     if font_data:
-        font_path = "/tmp/simsun.ttf"
-        with open(font_path, "wb") as f:
+        path = "/tmp/simsun.ttf"
+        with open(path, "wb") as f:
             f.write(font_data)
-        return font_path
+        return path
     return None
 
+
 # ============================================================
-# 两位小数格式化
+# 字符宽度（技术档案精确值）
 # ============================================================
 
-def format_two_decimal(value, field_key):
-    """自动添加两位小数"""
+def char_width(ch):
+    """数字/字母=4.0pt, 逗号=2.5pt, 小数点=2.0pt"""
+    if ch in '0123456789%':
+        return 4.0
+    elif ch == ',':
+        return 2.5
+    elif ch == '.':
+        return 2.0
+    return 4.0
+
+
+def measure_width(text):
+    """计算文字精确宽度"""
+    return sum(char_width(c) for c in str(text))
+
+
+# ============================================================
+# 格式化（逗号千分位 + 两位小数）
+# ============================================================
+
+def fmt_decimal(value, field_key):
     if not value or not str(value).strip():
         return value
     # 從業人數不加小数
@@ -80,149 +77,144 @@ def format_two_decimal(value, field_key):
     # 签章文字字段不加小数
     if field_key in ["agent_name", "agent_id", "receiver", "receive_date"]:
         return str(value).strip()
+    
     text = str(value).strip().replace(",", "")
-    # 已有小数点或百分号，保持不变
     if "." in text or "%" in text:
-        return str(value).strip()
-    # 纯数字，添加千分位和两位小数
+        return text
     try:
-        num = float(text)
-        if num == int(num):
-            return f"{int(num):,}.00"
-        else:
-            return f"{num:,.2f}"
-    except ValueError:
-        return str(value).strip()
+        return "{:,.2f}".format(int(text))
+    except:
+        return text
+
 
 # ============================================================
-# 字段坐标配置
+# 字段配置
+# 格式: (page, x0, x1, y0, y1)
+#   x0 = bbox左边缘, x1 = bbox右边缘
+#   y0 = bbox顶部, y1 = bbox底部
 # ============================================================
-
-RIGHT_EDGE = 565.5
-BASELINE_OFFSET = 6.9
 
 FIELD_CFG = {
-    # === 從業人數 (居中) ===
-    "eq1s":  (0, 149.9, 170.2, "c"),
-    "eq1e":  (0, 201.6, 170.2, "c"),
-    "eq2s":  (0, 253.4, 170.2, "c"),
-    "eq2e":  (0, 305.1, 170.2, "c"),
-    "eq3e":  (0, 563.5, 170.2, "c"),
+    # === 從業人數（居中）===
+    "eq1s":  (0, 147.9, 151.9, 170.2, 178.2),
+    "eq1e":  (0, 199.6, 203.6, 170.2, 178.2),
+    "eq2s":  (0, 251.3, 255.3, 170.2, 178.2),
+    "eq2e":  (0, 303.0, 307.0, 170.2, 178.2),
+    "eq3e":  (0, 561.5, 565.5, 170.2, 178.2),
     
-    # === 資產總額 (右對齊) ===
-    "aq1s":  (0, 151.9, 189.0, "r"),
-    "aq1e":  (0, 203.6, 189.0, "r"),
-    "aq2s":  (0, 255.3, 189.0, "r"),
-    "aq2e":  (0, 307.0, 189.0, "r"),
-    "aq3e":  (0, RIGHT_EDGE, 189.0, "r"),
+    # === 資產總額（右对齐）===
+    "aq1s":  (0, 135.9, 151.9, 189.0, 197.0),
+    "aq1e":  (0, 187.6, 203.6, 189.0, 197.0),
+    "aq2s":  (0, 239.3, 255.3, 189.0, 197.0),
+    "aq2e":  (0, 291.0, 307.0, 189.0, 197.0),
+    "aq3e":  (0, 545.5, 565.5, 189.0, 197.0),
     
-    # === 預繳稅款計算 (右對齊) ===
-    "L1":    (0, RIGHT_EDGE, 297.7, "r"),
-    "L2":    (0, RIGHT_EDGE, 316.5, "r"),
-    "L3":    (0, RIGHT_EDGE, 335.2, "r"),
-    "L4":    (0, RIGHT_EDGE, 354.0, "r"),
-    "L5":    (0, RIGHT_EDGE, 372.7, "r"),
-    "L6":    (0, RIGHT_EDGE, 391.5, "r"),
-    "L7":    (0, RIGHT_EDGE, 410.2, "r"),
-    "L8":    (0, RIGHT_EDGE, 429.0, "r"),
-    "L9":    (0, RIGHT_EDGE, 447.7, "r"),
-    "L10":   (0, RIGHT_EDGE, 466.5, "r"),
-    "L11":   (0, RIGHT_EDGE, 485.2, "r"),
-    "L12":   (0, RIGHT_EDGE, 504.0, "r"),
-    "L13":   (0, RIGHT_EDGE, 522.7, "r"),
-    "L13_1": (0, RIGHT_EDGE, 541.5, "r"),
-    "L14":   (0, RIGHT_EDGE, 560.2, "r"),
-    "L15":   (0, RIGHT_EDGE, 579.0, "r"),
-    "L16":   (0, RIGHT_EDGE, 597.7, "r"),
+    # === 預繳稅款計算（右对齐）===
+    "L1":    (0, 517.5, 565.5, 297.7, 305.7),
+    "L2":    (0, 517.5, 565.5, 316.5, 324.5),
+    "L3":    (0, 517.5, 565.5, 335.2, 343.2),
+    "L4":    (0, 517.5, 565.5, 354.0, 362.0),
+    "L5":    (0, 517.5, 565.5, 372.7, 380.7),
+    "L6":    (0, 517.5, 565.5, 391.5, 399.5),
+    "L7":    (0, 517.5, 565.5, 410.2, 418.2),
+    "L8":    (0, 517.5, 565.5, 429.0, 437.0),
+    "L9":    (0, 517.5, 565.5, 447.7, 455.7),
+    "L10":   (0, 517.5, 565.5, 466.5, 474.5),
+    "L11":   (0, 517.5, 565.5, 485.2, 493.2),
+    "L12":   (0, 517.5, 565.5, 504.0, 512.0),
+    "L13":   (0, 517.5, 565.5, 522.7, 530.7),
+    "L13_1": (0, 517.5, 565.5, 541.5, 549.5),
+    "L14":   (0, 517.5, 565.5, 560.2, 568.2),
+    "L15":   (0, 517.5, 565.5, 579.0, 587.0),
+    "L16":   (0, 517.5, 565.5, 597.7, 605.7),
     
     # === 匯總納稅 ===
-    "L17":   (0, RIGHT_EDGE, 631.5, "r"),
-    "L18":   (0, RIGHT_EDGE, 650.2, "r"),
-    "L19":   (0, RIGHT_EDGE, 669.0, "r"),
-    "L20":   (0, RIGHT_EDGE, 687.7, "r"),
-    "L21":   (0, RIGHT_EDGE, 706.5, "r"),
-    "L22":   (0, RIGHT_EDGE, 725.2, "r"),
+    "L17":   (0, 517.5, 565.5, 631.5, 639.5),
+    "L18":   (0, 517.5, 565.5, 650.2, 658.2),
+    "L19":   (0, 517.5, 565.5, 669.0, 677.0),
+    "L20":   (0, 517.5, 565.5, 687.7, 695.7),
+    "L21":   (0, 517.5, 565.5, 706.5, 714.5),
+    "L22":   (0, 517.5, 565.5, 725.2, 733.2),
     
     # === 附註 ===
-    "FZ1":   (0, RIGHT_EDGE, 762.7, "r"),
-    "FZ2":   (0, RIGHT_EDGE, 781.5, "r"),
-    "L23":   (0, RIGHT_EDGE, 800.0, "r"),
+    "FZ1":   (0, 517.5, 565.5, 762.7, 770.7),
+    "FZ2":   (0, 517.5, 565.5, 781.5, 789.5),
+    "L23":   (0, 517.5, 565.5, 800.0, 808.0),
     
-    # === 第2頁 簽章區域 ===
-    "agent_name":   (1, 104.8, 103.4, "l"),
-    "agent_id":     (1, 184.8, 113.0, "l"),
-    "receiver":     (1, 383.7, 103.4, "l"),
-    "receive_date": (1, 403.7, 122.6, "l"),
+    # === 第2頁 簽章（左对齐）===
+    "agent_name":   (1, 104.8, 184.8, 103.4, 111.4),
+    "agent_id":     (1, 184.8, 264.8, 113.0, 121.0),
+    "receiver":     (1, 383.7, 463.7, 103.4, 111.4),
+    "receive_date": (1, 403.7, 483.7, 122.6, 130.6),
 }
 
+
 # ============================================================
-# PDF填写核心函数
+# PDF填写核心函数（完美版）
 # ============================================================
 
 def fill_pdf_core(pdf_bytes, font_path, values):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    FONT_NAME = "SimSun"
-    FONT_SIZE = 8
-    TEXT_COLOR = (0, 0, 0)
-    COVER_COLOR = (1, 1, 1)
     
     try:
         for key, raw_value in values.items():
             if not raw_value or key not in FIELD_CFG:
                 continue
-            new_value = format_two_decimal(raw_value, key)
+            
+            new_value = fmt_decimal(raw_value, key)
             if not new_value:
                 continue
-            page_num, x_ref, y_top, align = FIELD_CFG[key]
+            
+            page_num, x0, x1, y0, y1 = FIELD_CFG[key]
             page = doc[page_num]
             text = str(new_value)
-            tw = len(text) * FONT_SIZE * 0.6
-            baseline_y = y_top + BASELINE_OFFSET
-            text_height = 8
+            tw = measure_width(text)
             
-            if align == "c":
-                cover_left = x_ref - 28
-                cover_right = x_ref + 28
-                write_x = x_ref - tw / 2
-            elif align == "r":
-                if key.startswith(("aq", "eq")) and key != "aq3e":
-                    cover_left = x_ref - 55
-                elif key.startswith("eq"):
-                    cover_left = x_ref - 55
-                else:
-                    cover_left = 514.5
-                cover_right = x_ref + 3
-                write_x = x_ref - tw
+            # 技术档案: origin_y = y0 + (y1-y0) * 0.75
+            origin_y = y0 + (y1 - y0) * 0.75
+            
+            # 判断对齐方式
+            if key.startswith("eq"):
+                # 居中
+                cx = (x0 + x1) / 2
+                write_x = cx - tw / 2
+            elif key in ["agent_name", "agent_id", "receiver", "receive_date"]:
+                # 签章左对齐
+                write_x = x0
             else:
-                cover_left = x_ref - 2
-                cover_right = x_ref + tw + 10
-                write_x = x_ref
+                # 右对齐: 从x1-1.0往左计算
+                write_x = (x1 - 1.0) - tw
             
-            cover_rect = fitz.Rect(cover_left, y_top - 1, cover_right, y_top + text_height + 2)
+            # === 1. 白色矩形覆盖原文字（四周留1.0pt余量，不碰边框线）===
+            cover_rect = fitz.Rect(x0 + 1.0, y0 + 1.0, x1 - 1.0, y1 - 1.0)
             shape = page.new_shape()
             shape.draw_rect(cover_rect)
-            shape.finish(color=COVER_COLOR, fill=COVER_COLOR)
+            shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
             shape.commit()
             
-            kwargs = {"fontname": FONT_NAME, "fontsize": FONT_SIZE, "color": TEXT_COLOR}
+            # === 2. 写入新文字（不重画边框线！）===
+            kwargs = {"fontname": "SimSun", "fontsize": 8, "color": (0, 0, 0)}
             if font_path and os.path.exists(font_path):
                 kwargs["fontfile"] = font_path
-            page.insert_text((write_x, baseline_y), text, **kwargs)
+            page.insert_text((write_x, origin_y), text, **kwargs)
         
+        # 保存（技术档案参数: garbage=0, deflate=False, clean=False）
         output = io.BytesIO()
-        doc.save(output, garbage=4, deflate=True)
+        doc.save(output, garbage=0, deflate=False, clean=False)
         output.seek(0)
         return output.getvalue()
+        
     finally:
         doc.close()
+
 
 # ============================================================
 # Streamlit UI
 # ============================================================
 
 def main():
-    st.title("📄 PDF智能填表系统")
-    st.markdown("上传企业所得税申报表PDF模板，修改指定字段，生成字体完全一致的新PDF")
+    st.title("PDF智能填表系统 v5.0")
+    st.markdown("完美版 | 方格线完整保证 | 字体完全一致 | 自动两位小数")
     
     st.header("1️⃣ 上传PDF模板")
     uploaded_file = st.file_uploader("选择PDF文件", type=["pdf"])
@@ -235,7 +227,9 @@ def main():
         2. 在下方输入框填写新数值（留空=不修改）
         3. 点击「生成填好的PDF」按钮
         4. 下载生成的PDF文件
+        
         **自动两位小数：** 输入 12345 → 自动变为 12,345.00
+        **從業人數和签章字段不加小数**
         """)
         return
     
@@ -245,7 +239,9 @@ def main():
         tmp_pdf = "/tmp/uploaded_template.pdf"
         with open(tmp_pdf, "wb") as f:
             f.write(pdf_bytes)
-        font_path = save_font_temp(tmp_pdf)
+        tmp_doc = fitz.open(tmp_pdf)
+        font_path = extract_font(tmp_doc)
+        tmp_doc.close()
     
     if font_path:
         st.success("✅ SimSun字体提取成功")
@@ -276,6 +272,7 @@ def main():
     
     with st.expander("📊 第3-16行 - 預繳稅款計算（自动两位小数）", expanded=True):
         col_left, col_right = st.columns(2)
+        
         left_fields = [
             ("L1", "3 營業收入"), ("L2", "4 營業成本"), ("L3", "5 利潤總額"),
             ("L4", "6 特定業務"), ("L5", "7 不徵稅收入"),
@@ -287,15 +284,18 @@ def main():
             ("L12", "14 應納所得稅額"), ("L13", "15 減免所得稅額"),
             ("L13_1", "15.1 減免明細"),
         ]
+        
         with col_left:
             for key, label in left_fields:
                 values[key] = st.text_input(label, value="", key=key)
+        
         with col_right:
             for key, label in right_fields:
                 values[key] = st.text_input(label, value="", key=key)
     
     with st.expander("📋 第16-25行 - 其他稅額及附註"):
         col_left, col_right = st.columns(2)
+        
         left_fields2 = [
             ("L14", "16 本期預繳"), ("L15", "17 減免其他"),
             ("L16", "18 本期應補(退)"), ("L17", "19 總機構本期"),
@@ -306,9 +306,11 @@ def main():
             ("L22", "24 稅率"), ("FZ1", "附1 中央級收入"),
             ("FZ2", "附2 地方級收入"), ("L23", "25 減免地方"),
         ]
+        
         with col_left:
             for key, label in left_fields2:
                 values[key] = st.text_input(label, value="", key=key)
+        
         with col_right:
             for key, label in right_fields2:
                 values[key] = st.text_input(label, value="", key=key)
@@ -324,6 +326,7 @@ def main():
                                                    placeholder="如：2025年04月14日")
     
     st.header("3️⃣ 生成PDF")
+    
     filled_values = {k: v.strip() for k, v in values.items() if v.strip()}
     
     if filled_values:
@@ -335,7 +338,9 @@ def main():
         with st.spinner("正在生成PDF..."):
             try:
                 result = fill_pdf_core(pdf_bytes, font_path, filled_values)
+                
                 st.success("✅ PDF生成成功！")
+                
                 st.download_button(
                     label="📥 点击下载填好的PDF",
                     data=result,
@@ -343,15 +348,17 @@ def main():
                     mime="application/pdf",
                     use_container_width=True
                 )
+                
                 try:
                     preview_doc = fitz.open(stream=result, filetype="pdf")
                     st.subheader("📋 预览")
                     for i, p in enumerate(preview_doc):
-                        pix = p.get_pixmap(dpi=100)
+                        pix = p.get_pixmap(dpi=120)
                         st.image(pix.tobytes("png"), caption=f"第{i+1}页")
                     preview_doc.close()
                 except Exception as e:
-                    st.warning(f"预览失败: {e}")
+                    st.warning(f"预览生成失败: {e}")
+                    
             except Exception as e:
                 st.error(f"❌ 生成失败: {e}")
                 st.exception(e)
@@ -360,22 +367,27 @@ def main():
         st.header("📖 使用说明")
         st.markdown("""
         **自动两位小数：**
-        - 输入 123456 → 显示 123,456.00
+        - 输入 12345 → 显示 12,345.00
         - 输入已带小数点 → 保持不变
         - 從業人數和签章字段 → 不加小数
         
-        **字段总数：** 40个
-        - 從業人數：5个
-        - 資產總額：5个
-        - 預繳稅款：21个
-        - 汇总纳税：6个
-        - 附註：3个
-        - 签章信息：4个（第2页）
+        **技术特点：**
+        - 方格线完整不断开
+        - SimSun字体完全一致
+        - 40个字段完整支持
+        """)
+        
+        st.header("⚠️ 注意事项")
+        st.markdown("""
+        1. 请使用原始PDF模板上传
+        2. 所有修改都在本地完成
+        3. 生成前请仔细核对输入的数值
         """)
     
     st.markdown("---")
-    st.markdown("<center>PDF智能填表系统 v3.0 | 坐标精确修复 | 自动两位小数 | 40字段支持</center>",
+    st.markdown("<center>PDF智能填表系统 v5.0 完美版 | 不重绘边框线 | 40字段支持</center>",
                 unsafe_allow_html=True)
+
 
 if __name__ == "__main__":
     main()
