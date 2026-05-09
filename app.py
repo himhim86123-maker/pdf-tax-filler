@@ -1578,9 +1578,14 @@ def fill_and_render(pdf_bytes, values, dpi=300, fmt="png"):
             page = doc[page_num]
             text = str(new_value)
             
-            # 逐个清除检测到的旧文字（扩大匹配范围 + 精确清除），并记录旧标签左边缘
-            INSET = 0.5
+            # 逐个清除检测到的旧文字（扩大匹配范围 + 完整覆盖span bbox）
+            INSET = 0.0  # 不缩小，完整覆盖旧文字span，避免遗漏冒号等边缘字符
             old_x0 = None
+            # 扩大匹配范围，确保捕获所有旧文字span（包括边缘部分）
+            match_x0 = x0 - 3
+            match_x1 = x1 + 3
+            match_y0 = y0 - 2
+            match_y1 = y1 + 2
             for b in page.get_text("dict")["blocks"]:
                 if "lines" not in b:
                     continue
@@ -1588,23 +1593,31 @@ def fill_and_render(pdf_bytes, values, dpi=300, fmt="png"):
                     for span in line["spans"]:
                         sb = span["bbox"]
                         # 用重叠检测代替包含检测（旧文字span可能包含标签，x0比字段配置更左）
-                        overlap_x = not (sb[2] < x0 or sb[0] > x1)
-                        overlap_y = not (sb[3] < y0 or sb[1] > y1)
+                        overlap_x = not (sb[2] < match_x0 or sb[0] > match_x1)
+                        overlap_y = not (sb[3] < match_y0 or sb[1] > match_y1)
                         if overlap_x and overlap_y:
                             # 记录最左边的span位置（用于新标签对齐）
                             if old_x0 is None or sb[0] < old_x0:
                                 old_x0 = sb[0]
-                            # 精确覆盖span bbox（只留0.5pt余量）
-                            cl = max(sb[0] + INSET, x0 + INSET)
-                            cr = min(sb[2] - INSET, x1 - INSET)
-                            ct = max(sb[1] + INSET, y0 + INSET)
-                            cb = min(sb[3] - INSET, y1 - INSET)
+                            # 安全左边界，确保不碰边框线
+                            # 左字段左边框在48.8附近，右字段中间竖线在307.4附近
+                            if x0 < 200:
+                                SAFE_LEFT = x0 + 4.5  # 49.5，远离左边框
+                            else:
+                                SAFE_LEFT = x0 + 1.5  # 308.5，远离中间竖线
+                            cl = max(sb[0] + INSET, SAFE_LEFT)
+                            cr = min(sb[2] - INSET, x1 - 1.0)
+                            ct = max(sb[1] + INSET, y0 + 1.0)
+                            cb = min(sb[3] - INSET, y1 - 1.0)
                             if cr > cl and cb > ct:
                                 rect = fitz.Rect(cl, ct, cr, cb)
                                 shape = page.new_shape()
                                 shape.draw_rect(rect)
                                 shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
                                 shape.commit()
+            
+            # 不再使用整块兜底覆盖（会涂白边框竖线）
+            # 逐个清除已足够，INSET=0确保完整覆盖旧文字span
             
             # 写入新文字
             if key in ["agent_name", "agent_id", "receiver", "receive_date"]:
