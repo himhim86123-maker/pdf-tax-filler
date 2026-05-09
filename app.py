@@ -6,7 +6,7 @@ import re
 import os
 import base64
 
-st.set_page_config(page_title="PDF智能填表系统 v14.3", layout="wide")
+st.set_page_config(page_title="PDF智能填表系统 v14.4", layout="wide")
 
 # ---- 字符宽度常量 ----
 CHAR_W = 4.0
@@ -369,15 +369,8 @@ def fill_and_render(pdf_bytes, values, dpi=300, fmt="png"):
             page = doc[page_num]
             text = str(new_value)
             
-            # 白色覆盖：先覆盖整个字段区域（更彻底）
-            full_rect = fitz.Rect(x0 + 0.5, y0 + 0.5, x1 - 0.5, y1 - 0.5)
-            shape = page.new_shape()
-            shape.draw_rect(full_rect)
-            shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
-            shape.commit()
-            
-            # 再逐个清除检测到的旧文字（双重保险）
-            INSET = 1.0
+            # 逐个清除检测到的旧文字（只清除文字区域，不碰边框线）
+            INSET = 2.0
             for b in page.get_text("dict")["blocks"]:
                 if "lines" not in b:
                     continue
@@ -466,8 +459,8 @@ def fill_and_render(pdf_bytes, values, dpi=300, fmt="png"):
 
 
 def main():
-    st.title("PDF智能填表系统 v14.3")
-    st.markdown("TextWriter + fitz.Font | **零外部依赖+星号修复版** | PNG输出")
+    st.title("PDF智能填表系统 v14.4")
+    st.markdown("TextWriter + fitz.Font | **零外部依赖+星号修复+边框保护版** | PNG输出")
 
     st.header("1️⃣ 上传PDF模板")
     uploaded_file = st.file_uploader("选择PDF文件", type=["pdf"])
@@ -593,7 +586,7 @@ def main():
                 st.exception(e)
 
     st.markdown("---")
-    st.markdown("<center>PDF智能填表系统 v14.3 | TextWriter + fitz.Font | 零外部依赖+星号修复版</center>",
+    st.markdown("<center>PDF智能填表系统 v14.4 | TextWriter + fitz.Font | 零外部依赖+星号修复+边框保护版</center>",
                 unsafe_allow_html=True)
 
 
