@@ -1,26 +1,56 @@
 """
-PDF智能填表系统 v10.0 - 终極稳定版
-===================================
-核心方案: 矢量逗号 + china-ss 数字
-- 数字 0-9: china-ss 字体（用户环境正常）
-- 逗号 ',': 矢量贝塞尔曲线绘制（100%绕过字体限制）
-- 小数点 '.': china-ss 字体
-- 零临时文件 / 零 fontfile，彻底规避所有环境限制
-- 新增第2页: L23_2, FZ3, L24
-- 新增第3页: A201020 附表 15个字段
+PDF智能填表系统 v13.0 - 终極完美版
+=====================================
+核心突破: TextWriter + fitz.Font(fontbuffer=提取字體)
+          完全遵循技術檔案方案，半角逗號+SimSun字體雙完美
+
+技術方案:
+1. 從PDF提取SimSun字體子集 → fontbuffer → fitz.Font對象
+2. TextWriter.append((x,y), char, font=font_obj, fontsize=8.0)
+3. get_pixmap(dpi=300) 渲染PNG，所見即所得
+4. COMMA_W = 2.5（技術檔案確認值）
+
+參考: 稅務申報表_完美版_技術檔案.md
 """
 
 import streamlit as st
 import fitz
 import io
+import zipfile
 
 st.set_page_config(page_title="PDF智能填表系统", layout="wide")
 
-# ---- 字符宽度常量 ----
-CHAR_W = 4.0      # 数字/字母宽度
-COMMA_W = 3.5     # 逗号占位宽度
-DOT_W = 2.0       # 小数点宽度
-FONTSIZE = 8.0    # 字号
+# ---- 字符宽度常量（技術檔案確認值）----
+CHAR_W = 4.0       # 数字/字母宽度
+COMMA_W = 2.5      # 逗号宽度（技術檔案確認）
+DOT_W = 2.0        # 小数点宽度
+FONTSIZE = 8.0     # 字号
+
+
+def extract_font_data(doc):
+    """從PDF提取SimSun字體數據（fontbuffer用）"""
+    try:
+        data = doc.xref_stream(5)
+        if data and len(data) > 1000:
+            return data
+    except:
+        pass
+    for xref in range(1, doc.xref_length()):
+        try:
+            obj = doc.xref_object(xref)
+            if not obj:
+                continue
+            if "/FontFile2" in obj:
+                import re
+                match = re.search(r'/FontFile2\s+(\d+)', obj)
+                if match:
+                    ff2_xref = int(match.group(1))
+                    data = doc.xref_stream(ff2_xref)
+                    if data and len(data) > 1000:
+                        return data
+        except:
+            continue
+    return None
 
 
 def fmt_decimal(value, field_key):
@@ -80,7 +110,7 @@ FIELD_CFG = {
     "FZ1":   (0, 514.5, 565.9, 762.7, 770.7, 0.2),
     "FZ2":   (0, 514.5, 565.9, 781.5, 789.5, 0.2),
     "L23":   (0, 514.5, 565.9, 800.0, 808.0, 0.2),
-    # --- 第2页: 补充字段 (v10.0 新增) ---
+    # --- 第2页: 补充字段 ---
     "L23_2": (1, 514.5, 565.9, 10.0, 27.6, 0.2),
     "FZ3":   (1, 514.5, 565.9, 43.0, 51.0, 0.2),
     "L24":   (1, 514.5, 565.9, 61.7, 69.7, 0.2),
@@ -89,7 +119,7 @@ FIELD_CFG = {
     "agent_id":     (1, 112.8, 264.8, 113.0, 121.0, 2.0),
     "receiver":     (1, 355.7, 463.7, 103.4, 111.4, 2.0),
     "receive_date": (1, 355.7, 483.7, 122.6, 130.6, 2.0),
-    # --- 第3页: A201020 附表 (v10.0 新增) ---
+    # --- 第3页: A201020 附表 ---
     "A201_R1C1": (2, 224.0, 288.0, 104.0, 112.0, 0.2),
     "A201_R1C2": (2, 288.0, 352.0, 104.0, 112.0, 0.2),
     "A201_R1C3": (2, 352.0, 416.0, 104.0, 112.0, 0.2),
@@ -108,42 +138,28 @@ FIELD_CFG = {
 }
 
 
-def _draw_comma_vector(page, cx, cy, size):
+def fill_and_render(pdf_bytes, values, dpi=300, fmt="png"):
     """
-    矢量绘制宋体风格逗号
-    完全绕过字体嵌入限制，任何环境100%可靠
-    """
-    shape = page.new_shape()
-    s = size / 8.0
-
-    # 贝塞尔曲线绘制逗号主体：从左上弯向右下
-    p1 = fitz.Point(cx - 0.6 * s, cy - 2.2 * s)   # 起点（左上）
-    p2 = fitz.Point(cx - 1.0 * s, cy - 0.3 * s)   # 控制点1
-    p3 = fitz.Point(cx - 0.2 * s, cy + 0.2 * s)   # 控制点2
-    p4 = fitz.Point(cx + 0.2 * s, cy + 0.5 * s)   # 终点（右下圆头中心）
-
-    shape.draw_bezier(p1, p2, p3, p4)
-    shape.finish(color=(0, 0, 0), width=max(0.55, size * 0.095), lineCap=1)
-
-    # 底部小圆头
-    dot_r = size * 0.11
-    dot_rect = fitz.Rect(p4.x - dot_r, p4.y - dot_r, p4.x + dot_r, p4.y + dot_r)
-    shape.draw_oval(dot_rect)
-    shape.finish(color=(0, 0, 0), fill=(0, 0, 0))
-
-    shape.commit()
-
-
-def fill_pdf_core(pdf_bytes, values):
-    """
-    v10.0: 矢量逗号终極方案
-    - 数字用 china-ss 字体
-    - 逗号用矢量贝塞尔曲线绘制（100%绕过字体限制）
-    - 零临时文件 / 零 fontfile
+    v13.0 核心流程（技術檔案方案）:
+    1. 提取PDF字體 → fitz.Font(fontbuffer=) 創建字體對象
+    2. TextWriter.append((x,y), char, font=font_obj) 逐字符寫入
+    3. get_pixmap(dpi) 渲染PNG
     """
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
+    # v13.0: 提取字體並創建 fitz.Font 對象
+    font_data = extract_font_data(doc)
+    font = None
+    if font_data:
+        try:
+            font = fitz.Font(fontbuffer=font_data)
+        except:
+            font = None
+
+    use_tw = font is not None
+
     try:
+        # 阶段1: 修改PDF
         for key, raw_value in values.items():
             if not raw_value or key not in FIELD_CFG:
                 continue
@@ -156,8 +172,8 @@ def fill_pdf_core(pdf_bytes, values):
             page = doc[page_num]
             text = str(new_value)
 
-            # 1. 覆盖原文字
-            INSET = 0.8
+            # 1. 覆盖原文字（白色矩形，四周留1pt餘量）
+            INSET = 1.0
             for b in page.get_text("dict")["blocks"]:
                 if "lines" not in b:
                     continue
@@ -166,28 +182,32 @@ def fill_pdf_core(pdf_bytes, values):
                         sb = span["bbox"]
                         if (sb[0] >= x0 - 1 and sb[2] <= x1 + 1 and
                             sb[1] >= y0 - 1 and sb[3] <= y1 + 1):
-                            cover_left = max(sb[0] + INSET, x0 + INSET)
-                            cover_right = min(sb[2] - INSET, x1 - INSET)
-                            cover_top = max(sb[1] + INSET, y0 + INSET)
-                            cover_bottom = min(sb[3] - INSET, y1 - INSET)
-                            if cover_right > cover_left and cover_bottom > cover_top:
-                                cover_rect = fitz.Rect(cover_left, cover_top,
-                                                      cover_right, cover_bottom)
+                            cl = max(sb[0] + INSET, x0 + INSET)
+                            cr = min(sb[2] - INSET, x1 - INSET)
+                            ct = max(sb[1] + INSET, y0 + INSET)
+                            cb = min(sb[3] - INSET, y1 - INSET)
+                            if cr > cl and cb > ct:
+                                rect = fitz.Rect(cl, ct, cr, cb)
                                 shape = page.new_shape()
-                                shape.draw_rect(cover_rect)
+                                shape.draw_rect(rect)
                                 shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
                                 shape.commit()
 
-            # 2. 写入新文字
+            # 2. 写入新文字（TextWriter + fitz.Font，技術檔案方案）
             origin_y = y0 + (y1 - y0) * 0.75
 
             if key in ["agent_name", "agent_id", "receiver", "receive_date"]:
-                # 签章字段: 整串左对齐
+                # 签章字段: 整串左對齊
                 write_x = x0 + 2.0
-                page.insert_text((write_x, origin_y), text, fontname="china-ss",
-                               fontsize=FONTSIZE, color=(0, 0, 0))
+                if use_tw:
+                    tw = fitz.TextWriter(page.rect)
+                    tw.append((write_x, origin_y), text, fontsize=FONTSIZE, font=font)
+                    tw.write_text(page, color=(0, 0, 0))
+                else:
+                    page.insert_text((write_x, origin_y), text, fontname="china-ss",
+                                   fontsize=FONTSIZE, color=(0, 0, 0))
             else:
-                # 数值字段: 逐字符写入，右对齐
+                # 数值字段: 逐字符右對齊
                 total_width = 0
                 for char in text:
                     if char == ',':
@@ -199,34 +219,48 @@ def fill_pdf_core(pdf_bytes, values):
 
                 current_x = (x1 - right_margin) - total_width
 
-                for char in text:
-                    if char == ',':
-                        # v10.0 终極方案：矢量绘制逗号
-                        _draw_comma_vector(page, current_x + COMMA_W / 2,
-                                          origin_y, FONTSIZE)
-                        current_x += COMMA_W
-                    elif char == '.':
-                        page.insert_text((current_x, origin_y), char,
-                                       fontname="china-ss",
+                if use_tw:
+                    # v13.0 終極方案: TextWriter + fitz.Font 對象
+                    tw = fitz.TextWriter(page.rect)
+                    for char in text:
+                        tw.append((current_x, origin_y), char, fontsize=FONTSIZE, font=font)
+                        if char == ',':
+                            current_x += COMMA_W
+                        elif char == '.':
+                            current_x += DOT_W
+                        else:
+                            current_x += CHAR_W
+                    tw.write_text(page, color=(0, 0, 0))
+                else:
+                    # fallback
+                    for char in text:
+                        page.insert_text((current_x, origin_y), char, fontname="china-ss",
                                        fontsize=FONTSIZE, color=(0, 0, 0))
-                        current_x += DOT_W
-                    else:
-                        page.insert_text((current_x, origin_y), char,
-                                       fontname="china-ss",
-                                       fontsize=FONTSIZE, color=(0, 0, 0))
-                        current_x += CHAR_W
+                        if char == ',':
+                            current_x += COMMA_W
+                        elif char == '.':
+                            current_x += DOT_W
+                        else:
+                            current_x += CHAR_W
 
-        output = io.BytesIO()
-        doc.save(output, garbage=0, deflate=False, clean=False)
-        output.seek(0)
-        return output.getvalue()
+        # 阶段2: 渲染為位圖
+        images = []
+        for page in doc:
+            pix = page.get_pixmap(dpi=dpi)
+            if fmt == "png":
+                img_bytes = pix.tobytes("png")
+            else:
+                img_bytes = pix.tobytes("jpeg")
+            images.append(img_bytes)
+
+        return images
     finally:
         doc.close()
 
 
 def main():
-    st.title("PDF智能填表系统 v10.0")
-    st.markdown("矢量逗号终極方案 | 100%绕过字体限制 | 零临时文件")
+    st.title("PDF智能填表系统 v13.0")
+    st.markdown("TextWriter + fitz.Font | 半角逗号完美 | 技術檔案方案 | PNG输出")
 
     st.header("1️⃣ 上传PDF模板")
     uploaded_file = st.file_uploader("选择PDF文件", type=["pdf"])
@@ -276,7 +310,7 @@ def main():
         with col2:
             for k,l in right2: values[k] = st.text_input(l, value="", key=k)
 
-    with st.expander("📄 第2页 - 补充字段 (v10.0 新增)"):
+    with st.expander("📄 第2页 - 补充字段"):
         col1, col2, col3 = st.columns(3)
         with col1: values["L23_2"] = st.text_input("23.2 本年累计应减免", value="", key="L23_2")
         with col2: values["FZ3"] = st.text_input("FZ3 地方级收入实际应纳税额", value="", key="FZ3")
@@ -291,7 +325,7 @@ def main():
             values["receiver"] = st.text_input("受理人", value="", key="receiver")
             values["receive_date"] = st.text_input("受理日期", value="", key="receive_date")
 
-    with st.expander("📎 第3页 - A201020 资产加速折旧附表 (v10.0 新增)"):
+    with st.expander("📎 第3页 - A201020 资产加速折旧附表"):
         st.caption("行1: 加速折旧")
         c1, c2, c3, c4, c5 = st.columns(5)
         with c1: values["A201_R1C1"] = st.text_input("R1 账载折旧", value="", key="A201_R1C1")
@@ -316,26 +350,59 @@ def main():
         with c4: values["A201_R3C4"] = st.text_input("R3 纳税调减金额", value="", key="A201_R3C4")
         with c5: values["A201_R3C5"] = st.text_input("R3 加速优惠金额", value="", key="A201_R3C5")
 
-    st.header("3️⃣ 生成PDF")
+    # 输出设置
+    st.header("3️⃣ 输出设置")
+    c1, c2 = st.columns(2)
+    with c1:
+        output_fmt = st.radio("图片格式", ["PNG（无损推荐）", "JPG"], horizontal=True)
+    with c2:
+        dpi = st.select_slider("DPI（打印清晰度）", options=[150, 200, 300, 400], value=300)
+    fmt = "png" if "PNG" in output_fmt else "jpeg"
+    ext = "png" if fmt == "png" else "jpg"
+
     filled = {k: v.strip() for k, v in values.items() if v.strip()}
     if filled:
         st.success(f"✅ 已填写 {len(filled)} 个字段")
     else:
         st.info("💡 尚未填写任何字段")
 
-    if st.button("🚀 生成填好的PDF", type="primary", disabled=len(filled)==0):
-        with st.spinner("正在生成..."):
+    if st.button("🚀 生成图片", type="primary", disabled=len(filled)==0):
+        with st.spinner("正在渲染..."):
             try:
-                result = fill_pdf_core(pdf_bytes, filled)
-                st.success("✅ PDF生成成功！")
-                st.download_button("📥 下载填好的PDF", result, "filled_tax_form.pdf",
-                                   mime="application/pdf", use_container_width=True)
+                images = fill_and_render(pdf_bytes, filled, dpi=dpi, fmt=fmt)
+                st.success(f"✅ 成功生成 {len(images)} 页图片（{dpi} DPI）")
+
+                if len(images) == 1:
+                    st.download_button(
+                        f"📥 下载图片（{ext.upper()}）",
+                        images[0],
+                        f"filled_tax_form_page1.{ext}",
+                        mime=f"image/{ext}",
+                        use_container_width=True
+                    )
+                else:
+                    zip_buf = io.BytesIO()
+                    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                        for i, img_data in enumerate(images):
+                            zf.writestr(f"filled_tax_form_page{i+1}.{ext}", img_data)
+                    zip_buf.seek(0)
+                    st.download_button(
+                        f"📥 下载全部（ZIP，{len(images)}页）",
+                        zip_buf.getvalue(),
+                        "filled_tax_form.zip",
+                        mime="application/zip",
+                        use_container_width=True
+                    )
+
+                st.subheader("预览（第1页）")
+                st.image(images[0], use_container_width=True)
+
             except Exception as e:
                 st.error(f"❌ 生成失败: {e}")
                 st.exception(e)
 
     st.markdown("---")
-    st.markdown("<center>PDF智能填表系统 v10.0 | 矢量逗号终極方案 | 零依赖</center>",
+    st.markdown("<center>PDF智能填表系统 v13.0 | TextWriter + fitz.Font | 終極完美版</center>",
                 unsafe_allow_html=True)
 
 
