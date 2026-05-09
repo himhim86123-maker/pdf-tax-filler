@@ -43,6 +43,25 @@ def extract_font_data(doc):
 def make_comma_font():
     """生成包含逗號/小數點的SimSun子集字體"""
     ttc_path = '/tmp/simsun.ttc'
+    def make_comma_font():
+    """生成包含逗號/小數點的SimSun子集字體"""
+    ttc_path = '/tmp/simsun.ttc'
+    subset_path = '/tmp/simsun_subset_comma_v14.ttf'
+    
+    # 🔑 新增：如果沒有完整字體，自動下載
+    if not os.path.exists(ttc_path):
+        try:
+            import urllib.request
+            url = 'https://github.com/AstroLightz/SimSun-Font/raw/main/simsun.ttc'
+            st.info("⬇️ 正在下載 SimSun 字體（18MB，約30秒）...")
+            urllib.request.urlretrieve(url, ttc_path)
+            st.success("✅ 字體下載完成")
+        except Exception as e:
+            st.warning(f"⚠️ 自動下載失敗: {e}")
+    
+    if os.path.exists(subset_path) and os.path.getsize(subset_path) > 1000:
+        return subset_path
+    # ... 後面不變
     subset_path = '/tmp/simsun_subset_comma_v14.ttf'
     if os.path.exists(subset_path) and os.path.getsize(subset_path) > 1000:
         return subset_path
