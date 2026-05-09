@@ -4,14 +4,15 @@ import io
 import zipfile
 import re
 import os
+import urllib.request
 
-st.set_page_config(page_title="PDF智能填表系统 v14.0", layout="wide")
+st.set_page_config(page_title="PDF智能填表系统 v14.1", layout="wide")
 
 # ---- 字符宽度常量 ----
-CHAR_W = 4.0      # 数字/字母宽度
-COMMA_W = 2.5     # 逗号宽度
-DOT_W = 2.0       # 小数点宽度
-FONTSIZE = 8.0    # 字号
+CHAR_W = 4.0
+COMMA_W = 2.5
+DOT_W = 2.0
+FONTSIZE = 8.0
 
 
 def extract_font_data(doc):
@@ -43,15 +44,11 @@ def extract_font_data(doc):
 def make_comma_font():
     """生成包含逗號/小數點的SimSun子集字體"""
     ttc_path = '/tmp/simsun.ttc'
-    def make_comma_font():
-    """生成包含逗號/小數點的SimSun子集字體"""
-    ttc_path = '/tmp/simsun.ttc'
     subset_path = '/tmp/simsun_subset_comma_v14.ttf'
     
-    # 🔑 新增：如果沒有完整字體，自動下載
+    # 自動下載完整SimSun字體（如果沒有）
     if not os.path.exists(ttc_path):
         try:
-            import urllib.request
             url = 'https://github.com/AstroLightz/SimSun-Font/raw/main/simsun.ttc'
             st.info("⬇️ 正在下載 SimSun 字體（18MB，約30秒）...")
             urllib.request.urlretrieve(url, ttc_path)
@@ -61,13 +58,11 @@ def make_comma_font():
     
     if os.path.exists(subset_path) and os.path.getsize(subset_path) > 1000:
         return subset_path
-    # ... 後面不變
-    subset_path = '/tmp/simsun_subset_comma_v14.ttf'
-    if os.path.exists(subset_path) and os.path.getsize(subset_path) > 1000:
-        return subset_path
+    
     if not os.path.exists(ttc_path):
         st.error(f"❌ 找不到完整SimSun字體: {ttc_path}")
         return None
+    
     try:
         from fontTools.subset import main as subset_main
         text = '受理人经办身份证号日期年月日0123456789,.'
@@ -114,7 +109,7 @@ FIELD_CFG = {
     "aq2s": (0, 204.3, 255.7, 183.6, 202.3, 0.5),
     "aq2e": (0, 256.0, 307.4, 183.6, 202.3, 0.5),
     "aq3e": (0, 514.5, 565.9, 183.6, 202.3, 0.5),
-    # --- 预缴税款计算 (L1-L23) ---
+    # --- 预缴税款计算 ---
     "L1": (0, 514.5, 565.9, 297.7, 305.7, 0.2),
     "L2": (0, 514.5, 565.9, 316.5, 324.5, 0.2),
     "L3": (0, 514.5, 565.9, 335.2, 343.2, 0.2),
@@ -141,7 +136,7 @@ FIELD_CFG = {
     "FZ1": (0, 514.5, 565.9, 762.7, 770.7, 0.2),
     "FZ2": (0, 514.5, 565.9, 781.5, 789.5, 0.2),
     "L23": (0, 514.5, 565.9, 800.0, 808.0, 0.2),
-    # --- 第2页补充字段 ---
+    # --- 第2页 ---
     "L23_2": (1, 514.5, 565.9, 10.0, 27.6, 0.2),
     "FZ3": (1, 514.5, 565.9, 43.0, 51.0, 0.2),
     "L24": (1, 514.5, 565.9, 61.7, 69.7, 0.2),
@@ -150,7 +145,7 @@ FIELD_CFG = {
     "agent_id": (1, 112.8, 264.8, 113.0, 121.0, 2.0),
     "receiver": (1, 355.7, 463.7, 103.4, 111.4, 2.0),
     "receive_date": (1, 355.7, 483.7, 122.6, 130.6, 2.0),
-    # --- 第3页 A201020 ---
+    # --- 第3页 ---
     "A201_R1C1": (2, 224.0, 288.0, 104.0, 112.0, 0.2),
     "A201_R1C2": (2, 288.0, 352.0, 104.0, 112.0, 0.2),
     "A201_R1C3": (2, 352.0, 416.0, 104.0, 112.0, 0.2),
@@ -172,7 +167,6 @@ FIELD_CFG = {
 def fill_and_render(pdf_bytes, values, dpi=300, fmt="png"):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     
-    # === 字體準備 ===
     font_data = extract_font_data(doc)
     font_simsun = None
     if font_data:
@@ -208,7 +202,7 @@ def fill_and_render(pdf_bytes, values, dpi=300, fmt="png"):
             page = doc[page_num]
             text = str(new_value)
             
-            # 1. 白色覆蓋舊文字
+            # 白色覆蓋舊文字
             INSET = 1.0
             for b in page.get_text("dict")["blocks"]:
                 if "lines" not in b:
@@ -229,11 +223,10 @@ def fill_and_render(pdf_bytes, values, dpi=300, fmt="png"):
                                 shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
                                 shape.commit()
             
-            # 2. 寫入新文字
+            # 寫入新文字
             origin_y = y0 + (y1 - y0) * 0.75
             
             if key in ["agent_name", "agent_id", "receiver", "receive_date"]:
-                # 簽章字段: 左對齊
                 write_x = x0 + 2.0
                 if use_fallback:
                     page.insert_text((write_x, origin_y), text, fontname="china-ss",
@@ -266,7 +259,6 @@ def fill_and_render(pdf_bytes, values, dpi=300, fmt="png"):
                         else:
                             current_x += CHAR_W
                 else:
-                    # 🔑 關鍵修復: 逗號用子集化字體，數字用提取字體
                     tw = fitz.TextWriter(page.rect)
                     for char in text:
                         if char in [',', '.'] and font_comma is not None:
@@ -282,7 +274,6 @@ def fill_and_render(pdf_bytes, values, dpi=300, fmt="png"):
                             current_x += CHAR_W
                     tw.write_text(page, color=(0, 0, 0))
         
-        # 渲染為位圖
         images = []
         for page in doc:
             pix = page.get_pixmap(dpi=dpi)
@@ -298,19 +289,14 @@ def fill_and_render(pdf_bytes, values, dpi=300, fmt="png"):
 
 
 def main():
-    st.title("PDF智能填表系统 v14.0")
-    st.markdown("TextWriter + fitz.Font | **逗號修復版** | PNG輸出")
-    st.markdown("<span style='color:red'>⚠️ 請先確保 /tmp/simsun.ttc 存在（完整SimSun字體，~18MB）</span>", unsafe_allow_html=True)
+    st.title("PDF智能填表系统 v14.1")
+    st.markdown("TextWriter + fitz.Font | **逗號修復版+自動下載** | PNG輸出")
 
     st.header("1️⃣ 上传PDF模板")
     uploaded_file = st.file_uploader("选择PDF文件", type=["pdf"])
 
     if uploaded_file is None:
         st.info("👆 请先上传PDF模板文件")
-        if os.path.exists('/tmp/simsun.ttc'):
-            st.success("✅ /tmp/simsun.ttc 已就緒")
-        else:
-            st.warning("⚠️ /tmp/simsun.ttc 不存在，逗號將無法顯示")
         return
 
     pdf_bytes = uploaded_file.getvalue()
@@ -430,7 +416,7 @@ def main():
                 st.exception(e)
 
     st.markdown("---")
-    st.markdown("<center>PDF智能填表系统 v14.0 | TextWriter + fitz.Font | 逗號修復版</center>",
+    st.markdown("<center>PDF智能填表系统 v14.1 | TextWriter + fitz.Font | 逗號修復版+自動下載</center>",
                 unsafe_allow_html=True)
 
 
