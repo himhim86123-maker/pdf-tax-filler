@@ -1,10 +1,10 @@
 """
-PDF智能填表系统 v9.1 - 逗号修复版
+PDF智能填表系统 v9.2 - 最终修复版
 ==================================
-修复: 改用 china-ss 内置字体，彻底修复逗号消失问题
-      (v8.4 的 fontfile 方案在 Streamlit Cloud 环境有兼容性问题)
-1. 数值字段: china-ss 逐字符写入，不传 fontfile
-2. COMMA_W: 2.5 → 3.5
+修复: 用 insert_font() 自定义字体名，彻底避免与PDF已有SimSun冲突
+      逗号完美显示 + 字体完全一致
+1. insert_font(fontname="MySimSun") 注册隔离字体
+2. COMMA_W = 3.5
 3. 新增第2页字段: L23_2, FZ3, L24
 4. 新增第3页 A201020 附表全部字段
 """
@@ -19,9 +19,35 @@ st.set_page_config(page_title="PDF智能填表系统", layout="wide")
 
 # ---- 字符宽度常量 ----
 CHAR_W = 4.0      # 数字/字母宽度
-COMMA_W = 3.5     # 逗号宽度 (v8.4: 2.5 → v9.1: 3.5)
+COMMA_W = 3.5     # 逗号宽度
 DOT_W = 2.0       # 小数点宽度
 FONTSIZE = 8.0    # 字号
+
+
+def extract_font_data(doc):
+    """从PDF中提取原始SimSun字体数据"""
+    try:
+        data = doc.xref_stream(5)
+        if data and len(data) > 1000:
+            return data
+    except:
+        pass
+    for xref in range(1, doc.xref_length()):
+        try:
+            obj = doc.xref_object(xref)
+            if not obj:
+                continue
+            if "/FontFile2" in obj:
+                import re
+                match = re.search(r'/FontFile2\s+(\d+)', obj)
+                if match:
+                    ff2_xref = int(match.group(1))
+                    data = doc.xref_stream(ff2_xref)
+                    if data and len(data) > 1000:
+                        return data
+        except:
+            continue
+    return None
 
 
 def fmt_decimal(value, field_key):
@@ -81,29 +107,26 @@ FIELD_CFG = {
     "FZ1":   (0, 514.5, 565.9, 762.7, 770.7, 0.2),
     "FZ2":   (0, 514.5, 565.9, 781.5, 789.5, 0.2),
     "L23":   (0, 514.5, 565.9, 800.0, 808.0, 0.2),
-    # --- 第2页: 补充字段 (v9.1 新增) ---
-    "L23_2": (1, 514.5, 565.9, 10.0, 27.6, 0.2),    # 本年累计应减免金额
-    "FZ3":   (1, 514.5, 565.9, 43.0, 51.0, 0.2),     # 地方级收入实际应纳税额
-    "L24":   (1, 514.5, 565.9, 61.7, 69.7, 0.2),     # 实际应补(退)所得税额
+    # --- 第2页: 补充字段 (v9.2 新增) ---
+    "L23_2": (1, 514.5, 565.9, 10.0, 27.6, 0.2),
+    "FZ3":   (1, 514.5, 565.9, 43.0, 51.0, 0.2),
+    "L24":   (1, 514.5, 565.9, 61.7, 69.7, 0.2),
     # --- 第2页: 签章信息 ---
     "agent_name":   (1, 80.8,  184.8, 103.4, 111.4, 2.0),
     "agent_id":     (1, 112.8, 264.8, 113.0, 121.0, 2.0),
     "receiver":     (1, 355.7, 463.7, 103.4, 111.4, 2.0),
     "receive_date": (1, 355.7, 483.7, 122.6, 130.6, 2.0),
-    # --- 第3页: A201020 附表 (v9.1 新增) ---
-    # 行1: 加速折旧
+    # --- 第3页: A201020 附表 (v9.2 新增) ---
     "A201_R1C1": (2, 224.0, 288.0, 104.0, 112.0, 0.2),
     "A201_R1C2": (2, 288.0, 352.0, 104.0, 112.0, 0.2),
     "A201_R1C3": (2, 352.0, 416.0, 104.0, 112.0, 0.2),
     "A201_R1C4": (2, 416.0, 480.0, 104.0, 112.0, 0.2),
     "A201_R1C5": (2, 480.0, 566.0, 104.0, 112.0, 0.2),
-    # 行2: 一次性扣除
     "A201_R2C1": (2, 224.0, 288.0, 120.7, 128.7, 0.2),
     "A201_R2C2": (2, 288.0, 352.0, 120.7, 128.7, 0.2),
     "A201_R2C3": (2, 352.0, 416.0, 120.7, 128.7, 0.2),
     "A201_R2C4": (2, 416.0, 480.0, 120.7, 128.7, 0.2),
     "A201_R2C5": (2, 480.0, 566.0, 120.7, 128.7, 0.2),
-    # 行3: 合计
     "A201_R3C1": (2, 224.0, 288.0, 135.7, 143.7, 0.2),
     "A201_R3C2": (2, 288.0, 352.0, 135.7, 143.7, 0.2),
     "A201_R3C3": (2, 352.0, 416.0, 135.7, 143.7, 0.2),
@@ -112,9 +135,21 @@ FIELD_CFG = {
 }
 
 
-def fill_pdf_core(pdf_bytes, values):
-    """v9.1: 全部使用 china-ss 内置字体，不传 fontfile，彻底修复逗号问题"""
+def fill_pdf_core(pdf_bytes, font_data, values):
+    """v9.2: insert_font 自定义字体名，避免 SimSun 冲突"""
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+    # 字体数据写入临时文件
+    fontfile_path = None
+    if font_data:
+        fd, fontfile_path = tempfile.mkstemp(suffix=".ttf")
+        os.write(fd, font_data)
+        os.close(fd)
+
+    # 自定义字体名，避免与 PDF 已有 SimSun 冲突
+    CUSTOM_FONT = "MySimSun"
+    # 备用字体（提取失败时使用）
+    FALLBACK_FONT = "china-ss"
 
     try:
         for key, raw_value in values.items():
@@ -128,6 +163,16 @@ def fill_pdf_core(pdf_bytes, values):
             page_num, x0, x1, y0, y1, right_margin = FIELD_CFG[key]
             page = doc[page_num]
             text = str(new_value)
+
+            # v9.2: 在当前页注册自定义字体（只注册一次即可）
+            if fontfile_path:
+                try:
+                    page.insert_font(fontname=CUSTOM_FONT, fontfile=fontfile_path)
+                    use_font = CUSTOM_FONT
+                except:
+                    use_font = FALLBACK_FONT
+            else:
+                use_font = FALLBACK_FONT
 
             # 1. 覆盖原文字
             INSET = 0.8
@@ -155,8 +200,7 @@ def fill_pdf_core(pdf_bytes, values):
             if key in ["agent_name", "agent_id", "receiver", "receive_date"]:
                 # 签章字段: 左对齐
                 write_x = x0 + 2.0
-                # v9.1: 统一使用 china-ss，不传 fontfile
-                page.insert_text((write_x, origin_y), text, fontname="china-ss",
+                page.insert_text((write_x, origin_y), text, fontname=use_font,
                                fontsize=FONTSIZE, color=(0, 0, 0))
             else:
                 # 数值字段: 逐字符写入，右对齐
@@ -172,9 +216,7 @@ def fill_pdf_core(pdf_bytes, values):
                 current_x = (x1 - right_margin) - total_width
 
                 for char in text:
-                    # v9.1: 统一使用 china-ss 内置字体，不传 fontfile
-                    # 这是逗号修复的核心：china-ss 内置字体确保逗号字形始终可用
-                    page.insert_text((current_x, origin_y), char, fontname="china-ss",
+                    page.insert_text((current_x, origin_y), char, fontname=use_font,
                                    fontsize=FONTSIZE, color=(0, 0, 0))
 
                     if char == ',':
@@ -190,11 +232,13 @@ def fill_pdf_core(pdf_bytes, values):
         return output.getvalue()
     finally:
         doc.close()
+        if fontfile_path and os.path.exists(fontfile_path):
+            os.unlink(fontfile_path)
 
 
 def main():
-    st.title("PDF智能填表系统 v9.1")
-    st.markdown("逗号修复版 | 改用 china-ss 内置字体 | 新增第2页补充字段 | 新增A201020附表")
+    st.title("PDF智能填表系统 v9.2")
+    st.markdown("insert_font 隔离方案 | 逗号+字体双修复 | 新增附表字段")
 
     st.header("1️⃣ 上传PDF模板")
     uploaded_file = st.file_uploader("选择PDF文件", type=["pdf"])
@@ -204,6 +248,17 @@ def main():
         return
 
     pdf_bytes = uploaded_file.getvalue()
+
+    with st.spinner("正在提取字体..."):
+        tmp_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        font_data = extract_font_data(tmp_doc)
+        tmp_doc.close()
+
+    if font_data:
+        st.success(f"✅ 字体提取成功 ({len(font_data)//1024}KB)")
+    else:
+        st.warning("⚠️ 无法提取字体，将使用备用字体")
+        font_data = None
 
     st.header("2️⃣ 填写字段数据")
     st.caption("留空表示不修改。数字自动添加两位小数")
@@ -244,8 +299,7 @@ def main():
         with col2:
             for k,l in right2: values[k] = st.text_input(l, value="", key=k)
 
-    # v9.1: 新增第2页补充字段
-    with st.expander("📄 第2页 - 补充字段 (v9.1 新增)"):
+    with st.expander("📄 第2页 - 补充字段 (v9.2 新增)"):
         col1, col2, col3 = st.columns(3)
         with col1: values["L23_2"] = st.text_input("23.2 本年累计应减免", value="", key="L23_2")
         with col2: values["FZ3"] = st.text_input("FZ3 地方级收入实际应纳税额", value="", key="FZ3")
@@ -260,8 +314,7 @@ def main():
             values["receiver"] = st.text_input("受理人", value="", key="receiver")
             values["receive_date"] = st.text_input("受理日期", value="", key="receive_date")
 
-    # v9.1: 新增第3页 A201020 附表
-    with st.expander("📎 第3页 - A201020 资产加速折旧附表 (v9.1 新增)"):
+    with st.expander("📎 第3页 - A201020 资产加速折旧附表 (v9.2 新增)"):
         st.caption("行1: 加速折旧")
         c1, c2, c3, c4, c5 = st.columns(5)
         with c1: values["A201_R1C1"] = st.text_input("R1 账载折旧", value="", key="A201_R1C1")
@@ -296,7 +349,7 @@ def main():
     if st.button("🚀 生成填好的PDF", type="primary", disabled=len(filled)==0):
         with st.spinner("正在生成..."):
             try:
-                result = fill_pdf_core(pdf_bytes, filled)
+                result = fill_pdf_core(pdf_bytes, font_data, filled)
                 st.success("✅ PDF生成成功！")
                 st.download_button("📥 下载填好的PDF", result, "filled_tax_form.pdf",
                                    mime="application/pdf", use_container_width=True)
@@ -305,7 +358,7 @@ def main():
                 st.exception(e)
 
     st.markdown("---")
-    st.markdown("<center>PDF智能填表系统 v9.1 | china-ss 内置字体 | 逗号修复 | A201020附表</center>",
+    st.markdown("<center>PDF智能填表系统 v9.2 | insert_font 隔离方案 | 逗号+字体双修复</center>",
                 unsafe_allow_html=True)
 
 
