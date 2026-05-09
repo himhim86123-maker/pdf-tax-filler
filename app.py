@@ -4,9 +4,10 @@ import io
 import zipfile
 import re
 import os
-import urllib.request
+import base64
+import tempfile
 
-st.set_page_config(page_title="PDF智能填表系统 v14.1", layout="wide")
+st.set_page_config(page_title="PDF智能填表系统 v14.2", layout="wide")
 
 # ---- 字符宽度常量 ----
 CHAR_W = 4.0
@@ -14,9 +15,200 @@ COMMA_W = 2.5
 DOT_W = 2.0
 FONTSIZE = 8.0
 
+# ---- 内嵌逗號子集字體（11.1KB base64，零外部依賴） ----
+COMMA_FONT_B64 = (
+    "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"
+    "FgBNIxAUFQBMIBAXAE0WCBcATQm4//BAIBAATQgoFwBNCCgUFQBMCCAWAE0IIBETAEwH"
+    "OBQWAEwsuP/AtBUWAEwsuP/AsxMATSy4/+CzFwBNLLj/4LMUAE0suP/gtA0QAEwouP/o"
+    "sxcATSi4/+hADhAATSYYFwBNJhgQAE0iuP/4QA4QAE0iEAwATRQYEABNHbj/6EALERIA"
+    "TBkYERIATBC4//BAChcATRAYERIATA64/+hAGRESAEwKGBAATQggDABNCBALAE0EGBAA"
+    "TQK4/+CzFwBNArj/6LMQAE0CuP/wQBoODwBMIRUMEiQdHgYdDCodGAAdEh4YHhgSErj/"
+    "wLMOAE0SuP/AQAkMAE0SQAsATQy4/8C2FQBNDDESLbj/8LQWFwBMLbj/8LMUAE0tuP/o"
+    "QBkTAE0JGBcATS0hFQkDGydJbBsFDwNJbA8NAD8rPysROTk5OSsrKysBLxDOKysrKxE5"
+    "OS8vEO0Q7RDtEO0REjk5MDErKysrKysrKysrKysrKysrKysrKysrKysAKysrKysrKysr"
+    "Kys3FBYzMjY1NCYnBgYXFAYjIiY1NDY3JiY1NDYzMhYVFAYHFhYnNCYjIgYVFBYXNjYZ"
+    "FRATERgYDA1YHBcVHhEQDg8aFxUaDxAREBAQERMQFxUMDC0QFBQPDRgKCBgMExoaEREY"
+    "CQcVDREYGBEMFQgKGEoOFRQLCxUIBhIAAAIACwACAHIAsQALACwA+LkAFv/oQCkQAE0O"
+    "EBcATSkQFgBNKBgWAE0oGA4SAEwoGAsATRoYCxIATBcYCwBNE7j/8LMWAE0TuP/4QBUO"
+    "EABMDRgXAE0NGBESAEwNCAsATQq4/+izFgBNCrj/6LMQAE0KuP/4QAoODwBMBBATAE0C"
+    "uP/osxAATQK4//hADw4PAEwGKh0VIR0bAB0PFbj/wLMVAE0PuP/Asw4ATQ+4/8BAJwwA"
+    "TQ9ACwBNFS4PKgkDGCdJbAEYHhJzEglJbAEYDANKEgF0EgUYDQA/PysrKysREjkBLxDO"
+    "KysrKxDt1O0Q7TIwMSsrKysrKysrKysrKysrKysrACsrNxQWMzI2NTQmIyIGFyImNTQ2"
+    "MzIWFRQGIyImNTQ2MzIWFRQWFxYWMzI2NwYGHBENDxYQEhEQGxQYGhgZHCEdDRMFBgYE"
+    "AgEBBQMSFgIFFHoWFxwMGB0bSxkcGCAoJio3DAoECAkGBAUBAQEoLwwQAAABAAz/6gD1"
+    "AM8AFQAMswkRABEALy8RMzAxNxcHHgIXFQYHLgInDgIHJz4Cbx4KBh0xHhQIGyMWBQQU"
+    "MCoCKisPzw0JNUozBQUBDRMzOjMwQTUSAxo9XQAABAAK/+YA9QDPABIALQA5AEIAH0AN"
+    "JhoMPzouIhMsLAMuAwAvLxI5LzMzETMyMzIyMDE3FBcHNjU1BgcnNjY3FwcGBxcHFzM3"
+    "FwcGBgcmJzUWNjY3Iw4CByc+AjcjBzcXBx4CFxUGByYmJxcHBgYHJzY2QQEQARIVAhYh"
+    "CRYJEgoOCCVUCQ0IAgUVBBsbDAQDLAMMHB8BGhgJAQYMOBEIBhccDRIDGR0pFQkQHxQD"
+    "Fh8UGQ8GFxJoGRMEGUIgDQUiEwcHFQkNBkUeCQ0IBAQCC04gKB4OBA4iKxUCdwcGHCQU"
+    "BAMDCBI+Fg0FJSoQAxVBAAACAA//5gDxANIALgA3AB9ADQ80LxglKyIrGBgcKBwALy8S"
+    "OS8zMxEzETMyMjAxNwcWFhUUBiMiJyYnDgIHNCc3FhY2NjcjDgIHJz4CNyMiByczNjcX"
+    "BwczNxcHMwYGJjU0NzbCAi4DBgEEBQgaBAoSEiEBGxANCgQ/BBEnJwIhIw8DJQ0LCUYC"
+    "ARcHBD0KEZIFBBUNCQ+KHhwOBAgJDRIaNzATBQwPBQgBCzpMJTg1FwMZNjQjAwkeHwwG"
+    "KwsOIiwPBAMEBwwAAAQAD//pAPUA0AAIADUATABRACVAEEFNNktLAw81KyEhFxdFA0UA"
+    "Ly8SOS8zETMzMxE5LzMzMjAxNzY2NxcGBwYHFzY3FwcGBzM3FwYHJzcjFgYmNTQ3Njcz"
+    "FzMmJic3FhYVFAczJiYnNxYWFRQHBzM3FwcGBxY3FQYHJicGByc2NyYnIwc3Fhc2Nyct"
+    "YBIQLiUmNnoNChcLEQstCRQSFAMNqQIMDwYKBAQBFwEGCwMPDwguAgYIAw0PCUxyChIM"
+    "EhkrQBQCNSswPwE/JxcMDgkcEBgZDrQDDwoUBAMEATQXIA8EFQ8LFAIbAh4VDAMDAwcM"
+    "GA0GFQ8CCBAFBwgOEg4CCBIGCAglChEFHBccBAQFCwYfIAgEDh4ZHwICHBUWGwAAAwAQ"
+    "/+gA8ADOAA4AEgAwACtAEy0gIA0sKCYmDRAFBQ0LDw8XDRcALy8SOS8zETkvMxE5LzMz"
+    "ETkvMzAxNxQXBzUjFQc2NCcXMzcXBxUzNRcOAgcmJzcWMzI2NyMHJzY2NyMHJzM3FyMH"
+    "MzcXwAEPZA8BAQ9jCQ56ZBQJDg4QAh0BGw0FDwhcCQwHCQQ5CQjBDRKFDlkLD7stDQYK"
+    "CQUULRQICgwEMzOHNBAHBA8MBAgGNwgOBBIOAggNEyQLDwAAAgAL/+YA9QDTAAMALgAx"
+    "QBYBIRIeEhYWBCUNAA0REQQMCCgoGgQaAC8vEjkvMzMROS8zMxEzETkvMzMRMzMwMTcV"
+    "MzUnFwcGBzM3FyMVMzcXIxUzNxcjFRQXBzY1NSMiByczNCcXMzUjBgYHJzY2Rzo4FgkI"
+    "CIIPFVwpDhRLQQ8VZQERAVUNCwktARA6PgoWEwMSIGs0NGgOBAwMDxUyDhQ0DxUmEQ0H"
+    "Hw4eAwkuFQkyDxkPAhMzAAMANv/tANIAyAADAAcAFwAnQBEUDgsFFhYLAQQECwwAAA"
+    "gLCAAvLxI5LzMROS8zETkvMxEzMjAxNxUzNQcVMzUHNjQnFzM3FwcVFBcHNSMVRXd3d4"
+    "YBAQ91BxEIAQ93uExMUldXeTtjPQoKDQaJHRgIGhMAAwAQ/+YAzADKAAMACAAhACNADx8"
+    "GDg4aAQQEGhgAABEaEQAvLxI5LzMROS8zETkvMzIwMTcVMzUHFAczNQcWNjU1IwYGBy"
+    "c+AycXMzcXBxUUByYnVGFhAWIuGxNiAyUZAhQWCwEBD18JEAkZASK5MjI4FxoxfQQBD"
+    "D0oLg4DECArRUAKCw4HshIIDggAAAkADf/nAO8AzwADAAcACwAnAC8AOgA+AEMAXABd"
+    "QCxaFA42MCwoIAkiIiAgDkFJSQ4FCAgOPD8/DgEEBA4nERslEQAADlM7O0wOTAAvLxI5"
+    "LzMROS8zMzMRMxE5LzMROS8zETkvMxE5LzMROS8zETMRMzIzMhEzMjAxNxUzNQcVMzUH"
+    "FTM1JzQnFwcVMzQnFwcVMzcXIxUzNxcjByczNSMHJxcXBwYHJzY2NxYWFRQGIyInJic3"
+    "FTM1BxQHMzUHFhY1NSMGBgcnPgI0JxczNxcHFRYHNCc/KSkpKSk3ARcIKQEXCAMLER8B"
+    "CxFtDgghCQ4ILBIJGx0CDxkqGAgGAgMDBQ9MMTEBMiQTETICIRkCERYKAQ8vBxAHARc"
+    "cnxoaIB4eJB8fShkRDQYXEhgMBhgLEWMLEQIIYwIIcxADIBIDDiAQDQoEBQoIDROKMj"
+    "I4HBczfAMBCzwjLA8DDiEsZhoJCgwHrhQIDQgABgAN//QA9wDEABwAQgBGAEoATgBSAF"
+    "9ALSMgMTg4Piw7LDAwIFBMK0xBQSAHEgQSFhYgSERPREtLIBENCgogRyFDQzUgNQAvLxI5"
+    "LzMzETkvMzMROS8zMxEzETkvMzMRMxE5LzMzETMROS8zMxEzMhEzETMwMTc2NzUjIgcnMz"
+    "UjIgcnMzcXIxUzNxcjFTcXBgcHNzY0JxczNxcHFRQXBzUjFTM3FyMVMzcXIyIHJzM1IyIH"
+    "JzM1IxU1FTM1MxUzNQcVMzUzFTM1DR4LBQ0LCSYHDQsJPwwRJwoMEScpASYmCFcBAQ1TB"
+    "w8IAQ0kHQwROioNEogNCwlUFg0LCTclJQwkVSUMJBcIBEMDCT0DCQwSPQwSPw4EERMIQyA"
+    "8IAkJDAYvIBIGDCsMEikNEwMJKQMJKwpoKCgoKC4qKioqAAAEAAz/9QD1AM0AGQArAEYAT"
+    "QAnQBFHSikfJiYeGikpPBYTEyM8IwAvLxI5LzMROS8zMzIRMxEzMjAxNwYHHgIGIyInJic"
+    "GBgcnNjY3IyIHJzM3FwczNxcjFTM3FyMiByczNSMiBwc3FwYGByc2NjcGBgcnNjY3FwcGBzc"
+    "2NxcHBgcnNjcXBgbHDg8hHAMFAgQHCicKIx8BISoSLQ0LCU8KD2NYDBE6LwwRgA0LCUcMDQ"
+    "tTQQETJw0MCh0PDxgNCQwhBRUJHBQyDQcUCyAyCjEuARI5sxMTDRAQBwoOGAsaDQQSKiAD"
+    "CQoPcAwSRAwSAwlEAwILBAUNCRMDIRcDBggTAzwVDQYuEwMUEg8ELmkSCQsEBhQAAAMACv"
+    "/1APUAxQAJABwAOQA1QBgQBhUBHyc0Li4iJiYfGBUVHyEdNzcrHysALy8SOS8zMxE5LzMROS8"
+    "zMhEzMxEzETMyMDE3NxYWBgYjIicmFzcXBgcGByc2JzUjIgcnMzcXBzczNxcjFTM3FyMVMzcX"
+    "IyIHJzM1NRcHFTM1IyIHIQISDgMHAQQBAwshAxAICQYOBQEJBwsJIgcRCRx2EBNGHg8TQCsP"
+    "EZIHCwklFgkjKggLvwIKDg0GCQuXIAIWCwsODwUNWAMJCgwHSQ8VUA4UXA4UAwloHAwHcbI"
+    "DAAQAEf/mAO0A0wADAAcADQA1ADFAFg0nJyQkLgUMDC4BBAQuMSsrAAAWLhYALy8SOS8zETM"
+    "ROS8zETkvMxE5LzMRMzAxNxUzNQcVMzUHNjc1IxU3NjcXBgcVFAcmJzUWNic1IwYHJzY3IyI"
+    "HJzM0JxczNjcXBgczNxcHU2FhYRILB2FvFQYQCSIXAR0ZDwEFSVQBUjpsCAsJMAEPEw0EEw"
+    "gWRggQCKgdHSMcHEAKCQseHhoNEQEoUBMHDwYEAgEIOUIRAxs1AwlTHwkYDQwBGAsNBgAA"
+    "AAABAAAAGgGBADEAAAAAAAIAEAAvAIgAAAIXAx4AAAAAAAAAAAAwAE0AtgD3AZICSgKiAysD"
+    "2gQjBT0F+QYlBp4HAgeTB/MITwiJCNAJhQolCrALHwuJAAAAAQAAAAUmZie1DThfDzz1AAsB"
+    "AAAAAAC3mEKAAAAAANOHH7P//v/cAQAA3AAAAAwAAgAAAAAAAAEAAAAAgAAOAIAAEQCAAAwAg"
+    "AAdAIAADQCAAA8AgAAJAIAADwCAAAwAgAAQAIAACwCAAAsBAAAMAAoADwAPABAACwA2ABAA"
+    "DQANAAwACgARAAEAAADc/9wAJAEA//7/9wEAAAEAAAAAAAAAAAAAAAAAAAAOAAMAgAGQAAUA"
+    "CACAAIAAAAAQAIAAgAAAAIAADABBAAACAQYAAwEBAQEBAAAAAQgAAAAAAAAAAAAAAFpZRUMA"
+    "QAAsjqsA3P/cACQA3AAkAAAAAQAAAAAAdACvAAAAIAABAAAAAQADAAEAAAAMAAQAmAAAAC"
+    "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"
+    "JiABRiMARrAAFgCwACNIAbAAI0gAILABI0iwAiNIASCwASNIsAIjSCOyAgABCCM4sgIAA"
+    "QkjOLECAQewARZZLSwjEA0MimMjimNgZLlAAAQAY1BYsAA4GzxZLSywBiWwCSWwCSWwBya"
+    "wdyuwAFBYBRsEWbAEJbAGJrB3K7AFJbAFJrAFJbAFJrB2K7AAUFgFGwRZsHcrLSywAyWwA"
+    "iWwAiWwCCawdiqKILAAVFgFGwRZsAQmsAYmsHcrsAUmsAUmsAUmsAUmsHYrsABUWAQbBFmw"
+    "dyssI4pKILAAVFgFGwRZsAMlsAcmsHcrsAIlsAYmsHcrsAMlsAUmsHcrIrAAVFgFGwRZsA"
+    "MlsAgmsHcrsAUmsAUmsHYrIrAAVFgFGwRZsAMlsAgmsHcrsAUmsAUmsHcrLSywAyWwAiWw"
+    "AiWwCCawdiuwA1gigFNYsABQWCGwZhuwaFkrsAMlsAUmsHcrI4pKIrAAVFgFGwRZsAMlsA"
+    "clsHcrsAUmsAUmsHYrILAAVFgFGwRZsAMlsAcmsHcrsAUmsAUmsHcrLSywAyWwAiWwAiW"
+    "wCCawdiuwCCawdisjiiCwA1RYsABQWCGwZhuwaFkrsAMlsAUmsHcrI4pKIrAAVFgFGwRZ"
+    "sAMlsAclsHcrsAUmsAUmsHYrILAAVFgFGwRZsAMlsAcmsHcrsAUmsAUmsHcrLSywBCawB"
+    "CawBCawdisjiiCwA1RYsABQWCGwZhuwaFkrsAQmsAUmsHcrI4pKIrAAVFgFGwRZsAQmsA"
+    "clsHcrsAUmsAUmsHYrILAAVFgFGwRZsAQlsAcmsHcrsAUmsAUmsHcr"
+)
 
 def extract_font_data(doc):
-    """從PDF提取SimSun字體數據（改進版：遍歷FontFile2引用）"""
+    """从PDF提取SimSun字体数据"""
     for xref in range(1, doc.xref_length()):
         try:
             obj = doc.xref_object(xref)
@@ -42,41 +234,20 @@ def extract_font_data(doc):
 
 
 def make_comma_font():
-    """生成包含逗號/小數點的SimSun子集字體"""
-    ttc_path = '/tmp/simsun.ttc'
+    """从内嵌base64生成逗号字体文件"""
     subset_path = '/tmp/simsun_subset_comma_v14.ttf'
-    
-    # 自動下載完整SimSun字體（如果沒有）
-    if not os.path.exists(ttc_path):
-        try:
-            url = 'https://github.com/AstroLightz/SimSun-Font/raw/main/simsun.ttc'
-            st.info("⬇️ 正在下載 SimSun 字體（18MB，約30秒）...")
-            urllib.request.urlretrieve(url, ttc_path)
-            st.success("✅ 字體下載完成")
-        except Exception as e:
-            st.warning(f"⚠️ 自動下載失敗: {e}")
-    
     if os.path.exists(subset_path) and os.path.getsize(subset_path) > 1000:
         return subset_path
     
-    if not os.path.exists(ttc_path):
-        st.error(f"❌ 找不到完整SimSun字體: {ttc_path}")
-        return None
-    
     try:
-        from fontTools.subset import main as subset_main
-        text = '受理人经办身份证号日期年月日0123456789,.'
-        subset_main([
-            ttc_path, '--font-number=0',
-            '--text=' + text,
-            '--output-file=' + subset_path,
-            '--layout-features=*', '--hinting'
-        ])
-        if os.path.exists(subset_path):
-            return subset_path
+        font_data = base64.b64decode(COMMA_FONT_B64)
+        with open(subset_path, 'wb') as f:
+            f.write(font_data)
+        st.info(f"✅ 内嵌字体释放成功: {len(font_data)} bytes")
+        return subset_path
     except Exception as e:
-        st.error(f"❌ 子集化失敗: {e}")
-    return None
+        st.error(f"❌ 内嵌字体释放失败: {e}")
+        return None
 
 
 def fmt_decimal(value, field_key):
@@ -172,22 +343,22 @@ def fill_and_render(pdf_bytes, values, dpi=300, fmt="png"):
     if font_data:
         try:
             font_simsun = fitz.Font(fontbuffer=font_data)
-            st.info(f"✅ 提取字體成功: {len(font_data)} bytes")
+            st.info(f"✅ 提取字体成功: {len(font_data)} bytes")
         except Exception as e:
-            st.warning(f"⚠️ 提取字體失敗: {e}")
+            st.warning(f"⚠️ 提取字体失败: {e}")
     
     comma_font_path = make_comma_font()
     font_comma = None
     if comma_font_path:
         try:
             font_comma = fitz.Font(fontfile=comma_font_path)
-            st.info(f"✅ 逗號字體載入成功")
+            st.info("✅ 逗号字体载入成功")
         except Exception as e:
-            st.warning(f"⚠️ 逗號字體載入失敗: {e}")
+            st.warning(f"⚠️ 逗号字体载入失败: {e}")
     
     use_fallback = (font_simsun is None)
     if use_fallback:
-        st.warning("⚠️ 使用備份字體 china-ss")
+        st.warning("⚠️ 使用备份字体 china-ss")
     
     try:
         for key, raw_value in values.items():
@@ -202,7 +373,7 @@ def fill_and_render(pdf_bytes, values, dpi=300, fmt="png"):
             page = doc[page_num]
             text = str(new_value)
             
-            # 白色覆蓋舊文字
+            # 白色覆盖旧文字
             INSET = 1.0
             for b in page.get_text("dict")["blocks"]:
                 if "lines" not in b:
@@ -223,7 +394,7 @@ def fill_and_render(pdf_bytes, values, dpi=300, fmt="png"):
                                 shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
                                 shape.commit()
             
-            # 寫入新文字
+            # 写入新文字
             origin_y = y0 + (y1 - y0) * 0.75
             
             if key in ["agent_name", "agent_id", "receiver", "receive_date"]:
@@ -236,7 +407,7 @@ def fill_and_render(pdf_bytes, values, dpi=300, fmt="png"):
                     tw.append((write_x, origin_y), text, fontsize=FONTSIZE, font=font_simsun)
                     tw.write_text(page, color=(0, 0, 0))
             else:
-                # 數值字段: 逐字符右對齊
+                # 数值字段: 逐字符右对齐
                 total_width = 0
                 for char in text:
                     if char == ',':
@@ -289,8 +460,8 @@ def fill_and_render(pdf_bytes, values, dpi=300, fmt="png"):
 
 
 def main():
-    st.title("PDF智能填表系统 v14.1")
-    st.markdown("TextWriter + fitz.Font | **逗號修復版+自動下載** | PNG輸出")
+    st.title("PDF智能填表系统 v14.2")
+    st.markdown("TextWriter + fitz.Font | **零外部依赖版** | PNG输出")
 
     st.header("1️⃣ 上传PDF模板")
     uploaded_file = st.file_uploader("选择PDF文件", type=["pdf"])
@@ -416,7 +587,7 @@ def main():
                 st.exception(e)
 
     st.markdown("---")
-    st.markdown("<center>PDF智能填表系统 v14.1 | TextWriter + fitz.Font | 逗號修復版+自動下載</center>",
+    st.markdown("<center>PDF智能填表系统 v14.2 | TextWriter + fitz.Font | 零外部依赖版</center>",
                 unsafe_allow_html=True)
 
 
