@@ -1,12 +1,11 @@
 """
-PDF智能填表系统 v8.4 - 最终确认版
-=====================================
-修复: 改用 page.insert_text 逐字符写入，确保逗号正确显示
-1. page.insert_text 逐字符写入（每个字符独立调用）
-2. 精确覆盖原文字span（内缩边距，完全不碰方格线）
-3. 所有数值字段统一右对齐
-4. eq/aq: 右间距0.5pt | L/FZ: 右间距0.2pt
-5. 保存: garbage=0, deflate=False, clean=False
+PDF智能填表系统 v9.0
+===================
+修复清单:
+1. 逗号渲染优化: COMMA_W 3.5pt + 全角逗号fallback
+2. 新增第2页字段: L23_2, FZ3, L24
+3. 新增第3页 A201020 附表全部字段
+4. 字体提取失败时自动切换全角逗号保证可读性
 """
 
 import streamlit as st
@@ -19,7 +18,7 @@ st.set_page_config(page_title="PDF智能填表系统", layout="wide")
 
 # ---- 字符宽度常量 ----
 CHAR_W = 4.0      # 数字/字母宽度
-COMMA_W = 2.5     # 逗号宽度
+COMMA_W = 3.5     # 逗号宽度 (v8.4: 2.5 → v9.0: 3.5)
 DOT_W = 2.0       # 小数点宽度
 FONTSIZE = 8.0    # 字号
 
@@ -59,7 +58,9 @@ def fmt_decimal(value, field_key):
     if field_key in ["agent_name", "agent_id", "receiver", "receive_date"]:
         return str(value).strip()
     text = str(value).strip().replace(",", "")
-    if "." in text or "%" in text:
+    if "%" in text:
+        return text
+    if "." in text:
         return text
     try:
         return "{:,.2f}".format(int(text))
@@ -67,6 +68,9 @@ def fmt_decimal(value, field_key):
         return text
 
 
+# =====================================================================
+# FIELD_CFG: (页码, x0, x1, y0, y1, right_margin)
+# =====================================================================
 FIELD_CFG = {
     # --- 第1行: 从业人数 (右间距0.5pt) ---
     "eq1s":  (0, 100.6, 152.3, 164.8, 183.6, 0.5),
@@ -107,12 +111,45 @@ FIELD_CFG = {
     "FZ1":   (0, 514.5, 565.9, 762.7, 770.7, 0.2),
     "FZ2":   (0, 514.5, 565.9, 781.5, 789.5, 0.2),
     "L23":   (0, 514.5, 565.9, 800.0, 808.0, 0.2),
+    # --- 第2页: 补充字段 (v9.0 新增) ---
+    "L23_2": (1, 514.5, 565.9, 10.0, 27.6, 0.2),    # 本年累计应减免金额
+    "FZ3":   (1, 514.5, 565.9, 43.0, 51.0, 0.2),     # 地方级收入实际应纳税额
+    "L24":   (1, 514.5, 565.9, 61.7, 69.7, 0.2),     # 实际应补(退)所得税额
     # --- 第2页: 签章信息 ---
     "agent_name":   (1, 80.8,  184.8, 103.4, 111.4, 2.0),
     "agent_id":     (1, 112.8, 264.8, 113.0, 121.0, 2.0),
     "receiver":     (1, 355.7, 463.7, 103.4, 111.4, 2.0),
     "receive_date": (1, 355.7, 483.7, 122.6, 130.6, 2.0),
+    # --- 第3页: A201020 附表 (v9.0 新增) ---
+    # 行1: 加速折旧
+    "A201_R1C1": (2, 224.0, 288.0, 104.0, 112.0, 0.2),  # 账载折旧\摊销金额
+    "A201_R1C2": (2, 288.0, 352.0, 104.0, 112.0, 0.2),  # 税收一般规定
+    "A201_R1C3": (2, 352.0, 416.0, 104.0, 112.0, 0.2),  # 加速政策计算
+    "A201_R1C4": (2, 416.0, 480.0, 104.0, 112.0, 0.2),  # 纳税调减金额
+    "A201_R1C5": (2, 480.0, 566.0, 104.0, 112.0, 0.2),  # 享受加速优惠金额
+    # 行2: 一次性扣除
+    "A201_R2C1": (2, 224.0, 288.0, 120.7, 128.7, 0.2),
+    "A201_R2C2": (2, 288.0, 352.0, 120.7, 128.7, 0.2),
+    "A201_R2C3": (2, 352.0, 416.0, 120.7, 128.7, 0.2),
+    "A201_R2C4": (2, 416.0, 480.0, 120.7, 128.7, 0.2),
+    "A201_R2C5": (2, 480.0, 566.0, 120.7, 128.7, 0.2),
+    # 行3: 合计
+    "A201_R3C1": (2, 224.0, 288.0, 135.7, 143.7, 0.2),
+    "A201_R3C2": (2, 288.0, 352.0, 135.7, 143.7, 0.2),
+    "A201_R3C3": (2, 352.0, 416.0, 135.7, 143.7, 0.2),
+    "A201_R3C4": (2, 416.0, 480.0, 135.7, 143.7, 0.2),
+    "A201_R3C5": (2, 480.0, 566.0, 135.7, 143.7, 0.2),
 }
+
+
+def _insert_text_with_fallback(page, pos, text, fontfile_path, fontsize, color):
+    """插入文字，带字体fallback"""
+    if fontfile_path:
+        page.insert_text(pos, text, fontname="SimSun",
+                        fontfile=fontfile_path, fontsize=fontsize, color=color)
+    else:
+        page.insert_text(pos, text, fontname="china-ss",
+                        fontsize=fontsize, color=color)
 
 
 def fill_pdf_core(pdf_bytes, font_data, values):
@@ -124,6 +161,9 @@ def fill_pdf_core(pdf_bytes, font_data, values):
         fd, fontfile_path = tempfile.mkstemp(suffix=".ttf")
         os.write(fd, font_data)
         os.close(fd)
+
+    # v9.0: 如果字体提取失败，使用全角逗号确保可读性
+    use_fullwidth_comma = (font_data is None)
 
     try:
         for key, raw_value in values.items():
@@ -137,6 +177,10 @@ def fill_pdf_core(pdf_bytes, font_data, values):
             page_num, x0, x1, y0, y1, right_margin = FIELD_CFG[key]
             page = doc[page_num]
             text = str(new_value)
+
+            # v9.0: 字体缺失时转换全角逗号
+            if use_fullwidth_comma:
+                text = text.replace(",", "\uFF0C")
 
             # 1. 覆盖原文字
             INSET = 0.8
@@ -164,17 +208,13 @@ def fill_pdf_core(pdf_bytes, font_data, values):
             if key in ["agent_name", "agent_id", "receiver", "receive_date"]:
                 # 签章字段: 左对齐
                 write_x = x0 + 2.0
-                if fontfile_path:
-                    page.insert_text((write_x, origin_y), text, fontname="SimSun",
-                                   fontfile=fontfile_path, fontsize=FONTSIZE, color=(0, 0, 0))
-                else:
-                    page.insert_text((write_x, origin_y), text, fontname="china-ss",
-                                   fontsize=FONTSIZE, color=(0, 0, 0))
+                _insert_text_with_fallback(page, (write_x, origin_y), text,
+                                          fontfile_path, FONTSIZE, (0, 0, 0))
             else:
                 # 数值字段: page.insert_text 逐字符写入
                 total_width = 0
                 for char in text:
-                    if char == ',':
+                    if char == ',' or char == '\uFF0C':  # v9.0: 支持全角逗号
                         total_width += COMMA_W
                     elif char == '.':
                         total_width += DOT_W
@@ -184,14 +224,10 @@ def fill_pdf_core(pdf_bytes, font_data, values):
                 current_x = (x1 - right_margin) - total_width
 
                 for char in text:
-                    if fontfile_path:
-                        page.insert_text((current_x, origin_y), char, fontname="SimSun",
-                                       fontfile=fontfile_path, fontsize=FONTSIZE, color=(0, 0, 0))
-                    else:
-                        page.insert_text((current_x, origin_y), char, fontname="china-ss",
-                                       fontsize=FONTSIZE, color=(0, 0, 0))
+                    _insert_text_with_fallback(page, (current_x, origin_y), char,
+                                              fontfile_path, FONTSIZE, (0, 0, 0))
 
-                    if char == ',':
+                    if char == ',' or char == '\uFF0C':
                         current_x += COMMA_W
                     elif char == '.':
                         current_x += DOT_W
@@ -209,8 +245,8 @@ def fill_pdf_core(pdf_bytes, font_data, values):
 
 
 def main():
-    st.title("📄 PDF智能填表系统 v8.4")
-    st.markdown("最终确认版 | 逗号修复 | 方框线对称保护 | 字体一致 | 自动两位小数")
+    st.title("PDF智能填表系统 v9.0")
+    st.markdown("逗号修复增强 | 新增第2页补充字段 | 新增A201020附表 | 全角逗号fallback")
 
     st.header("1️⃣ 上传PDF模板")
     uploaded_file = st.file_uploader("选择PDF文件", type=["pdf"])
@@ -227,9 +263,9 @@ def main():
         tmp_doc.close()
 
     if font_data:
-        st.success(f"✅ 字体提取成功 ({len(font_data)//1024}KB)")
+        st.success(f"✅ 字体提取成功 ({len(font_data)//1024}KB) - 使用原始SimSun字体")
     else:
-        st.warning("⚠️ 无法提取字体")
+        st.warning("⚠️ 无法提取字体 - 将使用全角逗号fallback确保可读性")
         font_data = None
 
     st.header("2️⃣ 填写字段数据")
@@ -271,6 +307,13 @@ def main():
         with col2:
             for k,l in right2: values[k] = st.text_input(l, value="", key=k)
 
+    # v9.0: 新增第2页补充字段
+    with st.expander("📄 第2页 - 补充字段 (v9.0 新增)"):
+        col1, col2, col3 = st.columns(3)
+        with col1: values["L23_2"] = st.text_input("23.2 本年累计应减免", value="", key="L23_2")
+        with col2: values["FZ3"] = st.text_input("FZ3 地方级收入实际应纳税额", value="", key="FZ3")
+        with col3: values["L24"] = st.text_input("24 实际应补(退)所得税额", value="", key="L24")
+
     with st.expander("✏️ 第2页 - 签章信息"):
         c1, c2 = st.columns(2)
         with c1:
@@ -279,6 +322,32 @@ def main():
         with c2:
             values["receiver"] = st.text_input("受理人", value="", key="receiver")
             values["receive_date"] = st.text_input("受理日期", value="", key="receive_date")
+
+    # v9.0: 新增第3页 A201020 附表
+    with st.expander("📎 第3页 - A201020 资产加速折旧附表 (v9.0 新增)"):
+        st.caption("行1: 加速折旧")
+        c1, c2, c3, c4, c5 = st.columns(5)
+        with c1: values["A201_R1C1"] = st.text_input("R1 账载折旧", value="", key="A201_R1C1")
+        with c2: values["A201_R1C2"] = st.text_input("R1 税收一般规定", value="", key="A201_R1C2")
+        with c3: values["A201_R1C3"] = st.text_input("R1 加速政策计算", value="", key="A201_R1C3")
+        with c4: values["A201_R1C4"] = st.text_input("R1 纳税调减金额", value="", key="A201_R1C4")
+        with c5: values["A201_R1C5"] = st.text_input("R1 加速优惠金额", value="", key="A201_R1C5")
+
+        st.caption("行2: 一次性扣除")
+        c1, c2, c3, c4, c5 = st.columns(5)
+        with c1: values["A201_R2C1"] = st.text_input("R2 账载折旧", value="", key="A201_R2C1")
+        with c2: values["A201_R2C2"] = st.text_input("R2 税收一般规定", value="", key="A201_R2C2")
+        with c3: values["A201_R2C3"] = st.text_input("R2 加速政策计算", value="", key="A201_R2C3")
+        with c4: values["A201_R2C4"] = st.text_input("R2 纳税调减金额", value="", key="A201_R2C4")
+        with c5: values["A201_R2C5"] = st.text_input("R2 加速优惠金额", value="", key="A201_R2C5")
+
+        st.caption("行3: 合计")
+        c1, c2, c3, c4, c5 = st.columns(5)
+        with c1: values["A201_R3C1"] = st.text_input("R3 账载折旧", value="", key="A201_R3C1")
+        with c2: values["A201_R3C2"] = st.text_input("R3 税收一般规定", value="", key="A201_R3C2")
+        with c3: values["A201_R3C3"] = st.text_input("R3 加速政策计算", value="", key="A201_R3C3")
+        with c4: values["A201_R3C4"] = st.text_input("R3 纳税调减金额", value="", key="A201_R3C4")
+        with c5: values["A201_R3C5"] = st.text_input("R3 加速优惠金额", value="", key="A201_R3C5")
 
     st.header("3️⃣ 生成PDF")
     filled = {k: v.strip() for k, v in values.items() if v.strip()}
@@ -299,7 +368,8 @@ def main():
                 st.exception(e)
 
     st.markdown("---")
-    st.markdown("<center>PDF智能填表系统 v8.4 最终确认版 | 逗号修复 | 方框线对称保护</center>", unsafe_allow_html=True)
+    st.markdown("<center>PDF智能填表系统 v9.0 | 逗号修复增强 | 全角逗号fallback | A201020附表</center>",
+                unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
