@@ -1578,46 +1578,60 @@ def fill_and_render(pdf_bytes, values, dpi=300, fmt="png"):
             page = doc[page_num]
             text = str(new_value)
             
-            # 逐个清除检测到的旧文字（扩大匹配范围 + 完整覆盖span bbox）
-            INSET = 0.0  # 不缩小，完整覆盖旧文字span，避免遗漏冒号等边缘字符
+            # 1. 先记录旧文字左边缘（必须在 redaction 之前，否则旧文字已被删除）
             old_x0 = None
-            # 扩大匹配范围，确保捕获所有旧文字span（包括边缘部分）
-            match_x0 = x0 - 3
-            match_x1 = x1 + 3
-            match_y0 = y0 - 2
-            match_y1 = y1 + 2
             for b in page.get_text("dict")["blocks"]:
                 if "lines" not in b:
                     continue
                 for line in b["lines"]:
                     for span in line["spans"]:
                         sb = span["bbox"]
-                        # 用重叠检测代替包含检测（旧文字span可能包含标签，x0比字段配置更左）
-                        overlap_x = not (sb[2] < match_x0 or sb[0] > match_x1)
-                        overlap_y = not (sb[3] < match_y0 or sb[1] > match_y1)
+                        overlap_x = not (sb[2] < x0 - 3 or sb[0] > x1 + 3)
+                        overlap_y = not (sb[3] < y0 - 2 or sb[1] > y1 + 2)
                         if overlap_x and overlap_y:
-                            # 记录最左边的span位置（用于新标签对齐）
                             if old_x0 is None or sb[0] < old_x0:
                                 old_x0 = sb[0]
-                            # 安全左边界，确保不碰边框线
-                            # 左字段左边框在48.8附近，右字段中间竖线在307.4附近
-                            if x0 < 200:
-                                SAFE_LEFT = x0 + 4.5  # 49.5，远离左边框
-                            else:
-                                SAFE_LEFT = x0 + 1.5  # 308.5，远离中间竖线
-                            cl = max(sb[0] + INSET, SAFE_LEFT)
-                            cr = min(sb[2] - INSET, x1 - 1.0)
-                            ct = max(sb[1] + INSET, y0 + 1.0)
-                            cb = min(sb[3] - INSET, y1 - 1.0)
-                            if cr > cl and cb > ct:
-                                rect = fitz.Rect(cl, ct, cr, cb)
-                                shape = page.new_shape()
-                                shape.draw_rect(rect)
-                                shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
-                                shape.commit()
             
-            # 不再使用整块兜底覆盖（会涂白边框竖线）
-            # 逐个清除已足够，INSET=0确保完整覆盖旧文字span
+            # 2. 使用 PDF Redaction 永久删除字段区域内的所有旧文字
+            # 这是跨 PyMuPDF 版本兼容的标准方法，比手动画白色矩形更可靠
+            if key in ["agent_name", "agent_id", "receiver", "receive_date"]:
+                # 安全边界：左字段左边框在48.8附近，右字段中间竖线在307.4附近
+                if x0 < 200:
+                    safe_x0 = x0 + 4.5  # 49.5，远离左边框
+                else:
+                    safe_x0 = x0 + 1.5  # 308.5，远离中间竖线
+                redact_rect = fitz.Rect(safe_x0, y0 + 1.0, x1 - 1.0, y1 - 1.0)
+                page.add_redact_annot(redact_rect, fill=(1, 1, 1))
+                page.apply_redactions()
+            
+            # 3. 数值字段：逐个清除检测到的旧文字（保留原有逻辑）
+            if key not in ["agent_name", "agent_id", "receiver", "receive_date"]:
+                INSET = 0.0
+                match_x0 = x0 - 3
+                match_x1 = x1 + 3
+                match_y0 = y0 - 2
+                match_y1 = y1 + 2
+                for b in page.get_text("dict")["blocks"]:
+                    if "lines" not in b:
+                        continue
+                    for line in b["lines"]:
+                        for span in line["spans"]:
+                            sb = span["bbox"]
+                            overlap_x = not (sb[2] < match_x0 or sb[0] > match_x1)
+                            overlap_y = not (sb[3] < match_y0 or sb[1] > match_y1)
+                            if overlap_x and overlap_y:
+                                if old_x0 is None or sb[0] < old_x0:
+                                    old_x0 = sb[0]
+                                cl = max(sb[0] + INSET, x0 + 1.0)
+                                cr = min(sb[2] - INSET, x1 - 1.0)
+                                ct = max(sb[1] + INSET, y0 + 1.0)
+                                cb = min(sb[3] - INSET, y1 - 1.0)
+                                if cr > cl and cb > ct:
+                                    rect = fitz.Rect(cl, ct, cr, cb)
+                                    shape = page.new_shape()
+                                    shape.draw_rect(rect)
+                                    shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
+                                    shape.commit()
             
             # 写入新文字
             if key in ["agent_name", "agent_id", "receiver", "receive_date"]:
