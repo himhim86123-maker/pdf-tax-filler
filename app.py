@@ -8,10 +8,10 @@ import os
 st.set_page_config(page_title="PDF智能填表系统 v14.0", layout="wide")
 
 # ---- 字符宽度常量 ----
-CHAR_W = 4.0
-COMMA_W = 2.5
-DOT_W = 2.0
-FONTSIZE = 8.0
+CHAR_W = 4.0      # 数字/字母宽度
+COMMA_W = 2.5     # 逗号宽度
+DOT_W = 2.0       # 小数点宽度
+FONTSIZE = 8.0    # 字号
 
 
 def extract_font_data(doc):
@@ -79,7 +79,10 @@ def fmt_decimal(value, field_key):
     try:
         return "{:,.2f}".format(int(text))
     except:
-        return textFIELD_CFG = {
+        return text
+
+
+FIELD_CFG = {
     # --- 第1行: 从业人数 ---
     "eq1s": (0, 100.6, 152.3, 164.8, 183.6, 0.5),
     "eq1e": (0, 152.6, 204.0, 164.8, 183.6, 0.5),
@@ -118,7 +121,8 @@ def fmt_decimal(value, field_key):
     "L22": (0, 514.5, 565.9, 725.2, 733.2, 0.2),
     "FZ1": (0, 514.5, 565.9, 762.7, 770.7, 0.2),
     "FZ2": (0, 514.5, 565.9, 781.5, 789.5, 0.2),
-    "L23": (0, 514.5, 565.9, 800.0, 808.0, 0.2),    # --- 第2页补充字段 ---
+    "L23": (0, 514.5, 565.9, 800.0, 808.0, 0.2),
+    # --- 第2页补充字段 ---
     "L23_2": (1, 514.5, 565.9, 10.0, 27.6, 0.2),
     "FZ3": (1, 514.5, 565.9, 43.0, 51.0, 0.2),
     "L24": (1, 514.5, 565.9, 61.7, 69.7, 0.2),
@@ -143,7 +147,10 @@ def fmt_decimal(value, field_key):
     "A201_R3C3": (2, 352.0, 416.0, 135.7, 143.7, 0.2),
     "A201_R3C4": (2, 416.0, 480.0, 135.7, 143.7, 0.2),
     "A201_R3C5": (2, 480.0, 566.0, 135.7, 143.7, 0.2),
-}def fill_and_render(pdf_bytes, values, dpi=300, fmt="png"):
+}
+
+
+def fill_and_render(pdf_bytes, values, dpi=300, fmt="png"):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     
     # === 字體準備 ===
@@ -268,7 +275,10 @@ def fmt_decimal(value, field_key):
         
         return images
     finally:
-        doc.close()def main():
+        doc.close()
+
+
+def main():
     st.title("PDF智能填表系统 v14.0")
     st.markdown("TextWriter + fitz.Font | **逗號修復版** | PNG輸出")
     st.markdown("<span style='color:red'>⚠️ 請先確保 /tmp/simsun.ttc 存在（完整SimSun字體，~18MB）</span>", unsafe_allow_html=True)
